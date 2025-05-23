@@ -51,7 +51,7 @@ def get_brave_homepage(company: str, count: int = 10) -> str | None:
     }
     # Refined query parameters for better regional results
     params = {
-        "q": f'"{company}" offizielle Webseite Schweiz', # "Schweiz" for context
+        "q": f'"{company}" offizielle Webseite', # "Schweiz" for context
         "count": count,
         "country": "ch",        # Prioritize Swiss results
         "search_lang": "de"     # Prioritize German language results (common in CH)
