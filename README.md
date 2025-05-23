@@ -45,8 +45,9 @@ source venv312/bin/activate
 ```
 
 ### 3. Install Python Dependencies
+Install the project in editable mode so the `brave-search` command is available:
 ```bash
-pip install mcp-use langchain-openai python-dotenv httpx
+pip install -e .
 ```
 
 ### 4. Set Up Environment Variables
@@ -72,17 +73,17 @@ npx --version   # Should show version number
 
 ### Basic Usage
 ```bash
-python brave_search.py "Company Name"
+brave-search "Company Name"
 ```
 
 ### Examples
 ```bash
 # Search for Migros (Swiss retailer)
-python brave_search.py "Migros"
+brave-search "Migros"
 
 # Search for any company
-python brave_search.py "Nestlé"
-python brave_search.py "Credit Suisse"
+brave-search "Nestlé"
+brave-search "Credit Suisse"
 ```
 
 ### Expected Output
