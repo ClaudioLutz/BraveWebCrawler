@@ -1,0 +1,15 @@
+# Core MCP and AI dependencies
+mcp-use
+langchain-openai
+
+# Environment and configuration
+python-dotenv
+
+# HTTP client for API requests
+httpx
+
+# Optional: Google AI integration (commented in code)
+# langchain-google-genai
+
+# Standard library modules used (no installation needed):
+# asyncio, os, sys, argparse, json, urllib.parse
