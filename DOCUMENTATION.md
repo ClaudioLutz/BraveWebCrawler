@@ -1,8 +1,8 @@
-# Technical Documentation - Startpage Company Search Agent
+# Technical Documentation - Brave Search Company Agent
 
 ## Overview
 
-This document provides detailed technical information about the Startpage Company Search Agent, including architecture, implementation details, and advanced configuration options.
+This document provides detailed technical information about the Brave Search Company Agent, including architecture, implementation details, and advanced configuration options. The agent uses Brave Search API as the primary method to find official company websites, with Wikidata as a fallback, then employs MCP (Model Context Protocol) with Playwright for automated data extraction.
 
 ## Architecture
 
@@ -10,21 +10,28 @@ This document provides detailed technical information about the Startpage Compan
 
 ```mermaid
 graph TD
-    A[startpage_search.py] --> B[MCP Client]
-    B --> C[Playwright MCP Server]
-    C --> D[Browser Automation]
-    A --> E[OpenAI LLM]
-    A --> F[Environment Config]
-    F --> G[.env file]
-    F --> H[startpage_mcp.json]
-    D --> I[startpage.com]
-    D --> J[Company Website]
-    E --> K[JSON Output]
+    A[brave_search.py] --> B[Brave Search API]
+    A --> C[Wikidata API]
+    A --> D[MCP Client]
+    D --> E[Playwright MCP Server]
+    E --> F[Browser Automation]
+    A --> G[OpenAI LLM]
+    A --> H[Environment Config]
+    H --> I[.env file]
+    H --> J[startpage_mcp.json]
+    B --> K[Official Website URL]
+    C --> K
+    F --> L[Company Website]
+    G --> M[JSON Output]
+    K --> F
 ```
 
 ### Technology Stack
 
 - **Python 3.11+**: Main runtime environment
+- **httpx**: HTTP client for API requests
+- **Brave Search API**: Primary search method for finding company websites
+- **Wikidata API**: Fallback search method
 - **mcp-use**: MCP client library for Python
 - **LangChain**: LLM integration framework
 - **OpenAI GPT**: Language model for content analysis
@@ -104,12 +111,17 @@ The `startpage_mcp.json` file configures the Playwright MCP server:
 
 ### Search Strategy
 
-The agent uses a sophisticated German-language prompt that instructs it to:
+The agent uses a two-phase approach:
 
-1. **Navigate to startpage.com**
-2. **Perform targeted search**: `"{company_name} offizielle Webseite Schweiz"`
-3. **Filter results**: Avoid social media, job sites, and PDFs
-4. **Extract specific data points**: CEO, founder, employees, etc.
+1. **URL Discovery Phase**: 
+   - Primary: Brave Search API with query `"{company_name} offizielle Webseite Schweiz"`
+   - Fallback: Wikidata API for official website property (P856)
+   - Filtering: Excludes social media, job sites, and blacklisted domains
+
+2. **Data Extraction Phase**: 
+   - Uses found URL or proceeds without URL if none found
+   - Employs German-language prompt for Swiss company focus
+   - Extracts specific data points with null handling
 
 ### Data Extraction Fields
 
@@ -119,27 +131,51 @@ The prompt specifies exact fields to extract:
 prompt = f"""
 Du bist ein Web-Agent mit Playwright-Werkzeugen.
 
-1. Öffne startpage.com  
-2. Suche im Suchfeld nach: "{company_name} offizielle Webseite Schweiz"  
-3. Öffne die offizielle Domain der Firma  
-   (keine Social- oder Job-Sites, keine PDFs).  
-4. Durchsuche Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte)
-   und sammle diese Fakten:
+Die offizielle Webseite für "{company_name}" wurde als "{root_url_for_prompt if company_url else 'nicht gefunden'}" identifiziert.
 
-   • Aktueller CEO / Geschäftsführer  
-   • Gründer (Komma-getrennt bei mehreren)  
+Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht gefunden' lautet:
+1. Öffne diese URL: {root_url_for_prompt}
+2. Durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte)
+   und sammle die unten genannten Fakten.
+
+Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
+
+Fakten zu sammeln:
+   • Aktueller CEO / Geschäftsführer
+   • Gründer (Komma-getrennt bei mehreren)
    • Inhaber (Besitzer der Firma)
-   • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250")  
-   • Gründungsjahr (JJJJ)  
-   • Offizielle Website (Root-URL ohne Pfad)
-   • Was macht diese Firma besser als ihre Konkurenz. (maximal 10 Wörter)
+   • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250")
+   • Gründungsjahr (JJJJ)
+   • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
+   • Was macht diese Firma besser als ihre Konkurrenz. (maximal 10 Wörter)
    • Auflistung der Standorte
-   • Firmenidentifikationsnummer (meistens im Impressum)
+   • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
    • Haupt-Telefonnummer
    • Haupt-Emailadresse
-
-Wenn ein Feld nicht auffindbar ist, gib **null** zurück.
 """
+```
+
+### URL Discovery Functions
+
+#### Brave Search Implementation
+```python
+def get_brave_homepage(company: str, count: int = 10) -> str | None:
+    """Fetches company homepage using Brave Search API."""
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_API_KEY
+    }
+    params = {"q": f'"{company}" offizielle Webseite Schweiz', "count": count}
+    # Implementation includes candidate filtering and blacklist checking
+```
+
+#### Wikidata Fallback Implementation
+```python
+def get_wikidata_homepage(company: str) -> str | None:
+    """Fetches company homepage from Wikidata."""
+    # 1. Search for entity by company name
+    # 2. Fetch P856 (official website) property
+    # 3. Validate and filter results
 ```
 
 ## Error Handling and Debugging
@@ -154,17 +190,27 @@ Logger.set_debug(2)  # DEBUG level messages (full verbose)
 
 ### Common Error Scenarios
 
-#### 1. MCP Connection Failures
+#### 1. Brave Search API Failures
+- **Cause**: Invalid API key, rate limiting, or network issues
+- **Detection**: HTTP status errors or request timeouts
+- **Resolution**: Check API key, verify quota limits, ensure network connectivity
+
+#### 2. Wikidata API Failures
+- **Cause**: Network issues or API rate limiting
+- **Detection**: HTTP errors or JSON parsing failures
+- **Resolution**: Implement retry logic, check network connectivity
+
+#### 3. MCP Connection Failures
 - **Cause**: npx not available or execution policy issues
 - **Detection**: Connection timeout errors
 - **Resolution**: Verify npx installation and PowerShell execution policy
 
-#### 2. LLM API Errors
+#### 4. LLM API Errors
 - **Cause**: Invalid API key or rate limiting
 - **Detection**: OpenAI authentication errors
 - **Resolution**: Check API key and usage limits
 
-#### 3. Browser Automation Failures
+#### 5. Browser Automation Failures
 - **Cause**: Website changes, network issues, or anti-bot measures
 - **Detection**: Playwright timeout or navigation errors
 - **Resolution**: Adjust timeouts or update navigation logic
@@ -318,6 +364,7 @@ async def main(company_name: str) -> str
 #### .env
 ```env
 OPENAI_API_KEY=sk-...
+BRAVE_API_KEY=BSA...  # Required for primary search
 GOOGLE_API_KEY=AIza...  # Optional
 ```
 
@@ -327,7 +374,7 @@ GOOGLE_API_KEY=AIza...  # Optional
 ```python
 import pytest
 import asyncio
-from startpage_search import main
+from brave_search import main
 
 @pytest.mark.asyncio
 async def test_company_search():

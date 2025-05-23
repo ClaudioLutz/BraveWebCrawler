@@ -1,14 +1,16 @@
-# Startpage Company Search Agent
+# Brave Search Company Agent
 
-An intelligent web scraping agent that uses MCP (Model Context Protocol) with Playwright to automatically search for company information on startpage.com and extract detailed business data.
+An intelligent company information extraction agent that uses Brave Search API and Wikidata as fallback to find official company websites, then uses MCP (Model Context Protocol) with Playwright to automatically navigate and extract detailed business data.
 
 ## Features
 
-- 🔍 Automated search on startpage.com
-- 🌐 Intelligent website navigation and data extraction
-- 📊 Structured JSON output with company details
-- 🤖 AI-powered content analysis using OpenAI GPT models
-- 🎭 Browser automation with Playwright MCP server
+- 🔍 **Brave Search API Integration**: Primary search method for finding official company websites
+- 📊 **Wikidata Fallback**: Secondary search using Wikidata when Brave Search fails
+- 🌐 **Intelligent Website Navigation**: Automated browsing and data extraction from company websites
+- 📋 **Structured JSON Output**: Consistent company data format with Swiss-specific fields
+- 🤖 **AI-Powered Content Analysis**: Uses OpenAI GPT models for intelligent data extraction
+- 🎭 **Browser Automation**: Playwright MCP server for reliable web scraping
+- 🇨🇭 **Swiss Company Focus**: Optimized for Swiss companies with CHE numbers and local data
 
 ## Prerequisites
 
@@ -44,7 +46,7 @@ source venv312/bin/activate
 
 ### 3. Install Python Dependencies
 ```bash
-pip install mcp-use langchain-openai python-dotenv
+pip install mcp-use langchain-openai python-dotenv httpx
 ```
 
 ### 4. Set Up Environment Variables
@@ -52,6 +54,9 @@ Create a `.env` file in the project root with your API keys:
 ```env
 # OpenAI API Key (required)
 OPENAI_API_KEY=your_openai_api_key_here
+
+# Brave Search API Key (required for primary search method)
+BRAVE_API_KEY=your_brave_api_key_here
 
 # Google API Key (optional, for Gemini models)
 GOOGLE_API_KEY=your_google_api_key_here
@@ -67,17 +72,17 @@ npx --version   # Should show version number
 
 ### Basic Usage
 ```bash
-python startpage_search.py "Company Name"
+python brave_search.py "Company Name"
 ```
 
 ### Examples
 ```bash
 # Search for Migros (Swiss retailer)
-python startpage_search.py "Migros"
+python brave_search.py "Migros"
 
 # Search for any company
-python startpage_search.py "Nestlé"
-python startpage_search.py "Credit Suisse"
+python brave_search.py "Nestlé"
+python brave_search.py "Credit Suisse"
 ```
 
 ### Expected Output
@@ -146,7 +151,11 @@ pip install mcp-use langchain-openai python-dotenv
 **Error:** `openai.AuthenticationError`
 **Solution:** Add your OpenAI API key to the `.env` file
 
-#### 5. MCP Connection Issues
+#### 5. Brave API Key Missing
+**Error:** `Warning: BRAVE_API_KEY is not set. Brave Search will be skipped.`
+**Solution:** Add your Brave Search API key to the `.env` file
+
+#### 6. MCP Connection Issues
 **Error:** Connection timeouts or MCP server errors
 **Solution:** 
 - Ensure npx is working: `npx --version`
@@ -163,11 +172,12 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 ## How It Works
 
 1. **Initialization**: Loads environment variables and creates MCP client
-2. **Search**: Opens startpage.com and searches for the company
-3. **Navigation**: Finds and opens the official company website
-4. **Data Extraction**: Crawls relevant pages (about, contact, impressum)
-5. **AI Analysis**: Uses GPT to extract structured information
-6. **Output**: Returns formatted JSON with company details
+2. **Primary Search**: Uses Brave Search API to find official company website
+3. **Fallback Search**: If Brave Search fails, queries Wikidata for official website
+4. **Website Navigation**: Uses Playwright MCP server to open the found website
+5. **Data Extraction**: Crawls relevant pages (about, contact, impressum, etc.)
+6. **AI Analysis**: Uses GPT to extract structured company information
+7. **Output**: Returns formatted JSON with Swiss-specific company details
 
 ## Supported Models
 
@@ -181,14 +191,14 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 
 ## File Structure
 ```
-startpage-search-agent/
-├── startpage_search.py      # Main script
+brave-search-agent/
+├── brave_search.py          # Main script
 ├── startpage_mcp.json       # MCP server configuration
-├── .env                     # Environment variables
+├── .env                     # Environment variables (not tracked)
+├── .gitignore              # Git ignore file
 ├── README.md               # This file
 ├── DOCUMENTATION.md        # Detailed technical documentation
-├── venv312/               # Python virtual environment
-└── mcp-use/              # MCP-use library (if cloned)
+└── venv312/               # Python virtual environment (not tracked)
 ```
 
 ## Contributing
