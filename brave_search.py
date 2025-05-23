@@ -227,13 +227,23 @@ oder danach:
     
     print(f"\nResult: {result}")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Search for company information using Brave/Wikidata and then an agent.')
-    parser.add_argument('company', help='The company name to search for')
+def console_main() -> None:
+    """Entry point for the ``brave-search`` console script."""
+    parser = argparse.ArgumentParser(
+        description="Search for company information using Brave/Wikidata and then an agent."
+    )
+    parser.add_argument("company", help="The company name to search for")
     args = parser.parse_args()
-    
+
     if not os.getenv("OPENAI_API_KEY"):
-        print("Error: OPENAI_API_KEY is not set. Please set it in your .env file or environment.", file=sys.stderr)
+        print(
+            "Error: OPENAI_API_KEY is not set. Please set it in your .env file or environment.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     asyncio.run(main(args.company))
+
+
+if __name__ == "__main__":
+    console_main()

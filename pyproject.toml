@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brave-search-agent"
+version = "0.1.0"
+description = "Company information extraction agent using Brave Search API and MCP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "mcp-use",
+    "langchain-openai",
+    "python-dotenv",
+    "httpx"
+]
+
+[tool.setuptools]
+py-modules = ["brave_search"]
+
+[project.scripts]
+brave-search = "brave_search:console_main"
