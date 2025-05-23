@@ -1,0 +1,2 @@
+[console_scripts]
+brave-search = brave_search:console_main

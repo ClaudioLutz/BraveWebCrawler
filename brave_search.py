@@ -39,7 +39,7 @@ def is_official_candidate(url: str, company: str) -> bool:
     return company.lower() in host.lower()
 
 def get_brave_homepage(company: str, count: int = 10) -> str | None:
-    """Fetches company homepage using Brave Search API."""
+    """Fetches company homepage using Brave Search API, prioritizing .ch domains."""
     global BRAVE_API_KEY
     if not BRAVE_API_KEY:
         print("Error: BRAVE_API_KEY not available for Brave Search.", file=sys.stderr)
@@ -49,24 +49,78 @@ def get_brave_homepage(company: str, count: int = 10) -> str | None:
         "Accept": "application/json",
         "X-Subscription-Token": BRAVE_API_KEY
     }
-    params = {"q": f'"{company}" offizielle Webseite Schweiz', "count": count}
+    # Refined query parameters for better regional results
+    params = {
+        "q": f'"{company}" offizielle Webseite Schweiz', # "Schweiz" for context
+        "count": count,
+        "country": "ch",        # Prioritize Swiss results
+        "search_lang": "de"     # Prioritize German language results (common in CH)
+    }
+
     try:
         resp = httpx.get(SEARCH_URL, headers=headers, params=params, timeout=10.0)
         resp.raise_for_status()
         results = resp.json().get("web", {}).get("results", [])
-        
-        # First pass: company in host & not blacklisted
+
+        ch_official_urls = []
+        other_official_urls = []
+        any_non_blacklisted_urls = []
+
         for r in results:
             url = r.get("url", "")
-            if is_official_candidate(url, company):
-                return url
-        
-        # Second pass: not blacklisted (and hostname exists)
-        for r in results:
-            url = r.get("url", "")
+            if not url:
+                continue
+
             parsed_url = urlparse(url)
-            if parsed_url.hostname and not any(domain in parsed_url.hostname for domain in BLACKLIST):
-                return url
+            host = parsed_url.hostname or ""
+
+            if not host:  # Skip if no hostname
+                continue
+
+            # Check blacklist first
+            if any(domain in host for domain in BLACKLIST):
+                continue
+
+            is_ch_domain = host.endswith(".ch")
+
+            # Enhanced company name matching in host:
+            # Takes the first word of the company name (e.g., "Migros" from "Migros Genossenschaft")
+            # and a version with spaces removed for matching.
+            company_main_name = company.lower().split(" ")[0].replace(",", "").replace(".", "")
+            company_name_no_spaces = company.lower().replace(" ", "").replace(".", "") # also remove dots
+            host_cleaned = host.lower()
+
+            company_match_in_host = (company_main_name in host_cleaned) or \
+                                    (company_name_no_spaces in host_cleaned) or \
+                                    (host_cleaned.startswith(company_main_name)) or \
+                                    (host_cleaned.startswith(company_name_no_spaces))
+
+
+            added_to_priority_list = False
+            if is_ch_domain and company_match_in_host:
+                ch_official_urls.append(url)
+                added_to_priority_list = True
+            elif company_match_in_host:  # Not .ch, but company name in host
+                other_official_urls.append(url)
+                added_to_priority_list = True
+            
+            if not added_to_priority_list:
+                # Add to this list only if not already in a higher-priority one and host exists
+                any_non_blacklisted_urls.append(url)
+
+        # Return based on priority
+        if ch_official_urls:
+            print(f"Found .ch official candidate(s) from Brave: {ch_official_urls[0]} (using this one)")
+            return ch_official_urls[0]
+
+        if other_official_urls:
+            print(f"Found other official candidate(s) from Brave (non-.ch): {other_official_urls[0]} (using this one)")
+            return other_official_urls[0]
+        
+        if any_non_blacklisted_urls:
+            print(f"Found any non-blacklisted, non-official candidate from Brave as fallback: {any_non_blacklisted_urls[0]} (using this one)")
+            return any_non_blacklisted_urls[0]
+
     except httpx.RequestError as e:
         print(f"Brave Search API request error: {e}", file=sys.stderr)
     except httpx.HTTPStatusError as e:
@@ -84,6 +138,7 @@ def get_wikidata_homepage(company: str) -> str | None:
         "action": "wbsearchentities",
         "format": "json",
         "language": "de",
+        "country": "ch",  
         "search": company
     }
     try:
@@ -194,7 +249,7 @@ Fakten zu sammeln:
    • Gründungsjahr (JJJJ)
    • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
    • Was macht diese Firma besser als ihre Konkurrenz. (maximal 10 Wörter)
-   • Auflistung der Standorte
+   • Addresse Hauptsitz
    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
    • Haupt-Telefonnummer
    • Haupt-Emailadresse
@@ -210,7 +265,7 @@ oder danach:
   "employees": "<zahl/bereich oder null>",
   "founded": "<jahr oder null>",
   "better_then_the_rest": "<text oder null>",
-  "Standorte": "<[Liste] oder null>",
+  "Hauptsitz": "<text oder null>",
   "Firmenidentifikationsnummer": "<CHE- oder null>",
   "HauptTelefonnummer": "<xxx xxx xx xx oder null>",
   "HauptEmailAdresse": "<xx@xx.xx oder null>"
