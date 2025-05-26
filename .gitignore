@@ -1,3 +1,5 @@
 # Environments
 venv312/
 .env
+input.csv
+output.csv
