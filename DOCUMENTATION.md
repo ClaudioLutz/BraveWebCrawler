@@ -79,6 +79,13 @@ llm = ChatOpenAI(
 agent = MCPAgent(llm=llm, client=client, max_steps=30)
 ```
 
+#### 5. Batch Processing
+Use `company_processor.py` to process many companies from a CSV file:
+```bash
+python company_processor.py input.csv output.csv
+```
+The input file must have `company_number` and `company_name` columns.
+
 ## MCP (Model Context Protocol) Integration
 
 ### What is MCP?
@@ -148,10 +155,11 @@ Fakten zu sammeln:
    • Gründungsjahr (JJJJ)
    • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
    • Was macht diese Firma besser als ihre Konkurrenz. (maximal 10 Wörter)
-   • Auflistung der Standorte
+   • Hauptsitz (Adresse des Firmenhauptsitzes)
    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
    • Haupt-Telefonnummer
    • Haupt-Emailadresse
+   • Geschäftsbericht (URL zum PDF, falls vorhanden)
 """
 ```
 
@@ -274,8 +282,16 @@ To extract additional information, modify the JSON structure in the prompt:
 {{
   "official_website": "<url oder null>",
   "ceo": "<name oder null>",
-  "new_field": "<description>",  # Add new field here
-  ...
+  "founder": "<name oder null>",
+  "owner": "<name oder null>",
+  "employees": "<zahl oder null>",
+  "founded": "<jahr oder null>",
+  "better_then_the_rest": "<kurze beschreibung>",
+  "Hauptsitz": "<adresse oder null>",
+  "Firmenidentifikationsnummer": "<CHE-... oder null>",
+  "HauptTelefonnummer": "<telefon oder null>",
+  "HauptEmailAdresse": "<email oder null>",
+  "Geschäftsbericht": "<url oder null>"
 }}
 ```
 
@@ -438,10 +454,12 @@ async def test_company_search():
 
 ### Planned Features
 - Support for multiple search engines
-- Batch processing capabilities
 - Result caching and storage
 - Web interface for easier usage
 - Multi-language support
+
+### Completed Features
+- Batch processing via `company_processor.py`
 
 ### Technical Improvements
 - Async processing for better performance
