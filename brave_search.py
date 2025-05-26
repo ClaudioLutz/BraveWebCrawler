@@ -21,7 +21,7 @@ load_dotenv()
 SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 WIKIDATA_SEARCH = "https://www.wikidata.org/w/api.php"
 WIKIDATA_ENTITY = "https://www.wikidata.org/w/api.php"
-BLACKLIST = {"wikipedia.org", "facebook.com", "twitter.com", "linkedin.com"} # Domains to ignore
+BLACKLIST = {"wikipedia.org", "facebook.com", "twitter.com", "linkedin.com", "pflegeheimvergleich.ch"} # Domains to ignore
 
 # Global variable for Brave API Key
 BRAVE_API_KEY = None
@@ -51,7 +51,7 @@ def get_brave_homepage(company: str, count: int = 10) -> str | None:
     }
     # Refined query parameters for better regional results
     params = {
-        "q": f'"{company}" offizielle Webseite', # "Schweiz" for context
+        "q": f'"{company}" homepage', # "Schweiz" for context
         "count": count,
         "country": "ch",        # Prioritize Swiss results
         "search_lang": "de"     # Prioritize German language results (common in CH)
@@ -253,6 +253,7 @@ Fakten zu sammeln:
    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
    • Haupt-Telefonnummer
    • Haupt-Emailadresse
+   • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes
 
 Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor
 oder danach:
@@ -268,7 +269,8 @@ oder danach:
   "Hauptsitz": "<text oder null>",
   "Firmenidentifikationsnummer": "<CHE- oder null>",
   "HauptTelefonnummer": "<xxx xxx xx xx oder null>",
-  "HauptEmailAdresse": "<xx@xx.xx oder null>"
+  "HauptEmailAdresse": "<xx@xx.xx oder null>",
+  "Geschäftsbericht" : <"url oder PDF-Link">
 }}
 """
     
