@@ -8,18 +8,23 @@ from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from mcp_use.logging import Logger
 from langchain_openai import ChatOpenAI
-import httpx
-from urllib.parse import urlparse
-from typing import List, Dict, Any
+# import httpx # Moved to search_common
+from urllib.parse import urlparse # Still needed
+# from typing import List, Dict, Any # Moved to search_common
 
 # Load environment variables from .env file
 load_dotenv()
 
-# --- Constants for Brave/Wikidata search ---
-SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-WIKIDATA_SEARCH = "https://www.wikidata.org/w/api.php"
-WIKIDATA_ENTITY = "https://www.wikidata.org/w/api.php"
-BLACKLIST = {"wikipedia.org", "facebook.com", "twitter.com", "linkedin.com", "pflegeheimvergleich.ch"}
+# --- Import functions and constants from search_common ---
+from search_common import (
+    select_best_url_with_llm,
+    get_brave_search_candidates,
+    get_wikidata_homepage,
+    # SEARCH_URL, # Not directly used in this file anymore
+    # WIKIDATA_SEARCH, # Not directly used in this file anymore
+    # WIKIDATA_ENTITY, # Not directly used in this file anymore
+    BLACKLIST # Referenced by moved functions, effectively via search_common
+)
 
 # Global variables for API Keys - these will be set ONCE in console_main
 BRAVE_API_KEY_GLOBAL = None
@@ -35,181 +40,8 @@ EXPECTED_JSON_KEYS = [
 # Enable mcp_use debug logging
 Logger.set_debug(1)
 
-
-def select_best_url_with_llm(company_name: str, search_results: List[Dict[str, Any]], llm: ChatOpenAI) -> str | None:
-    """
-    Uses a GPT model to select the most promising URL from a list of search results.
-    Each item in search_results should be a dict with at least 'url', 'title', and 'description'.
-    """
-    if not search_results:
-        return None
-
-    formatted_results = []
-    for i, result in enumerate(search_results):
-        formatted_results.append(
-            f"{i+1}. URL: {result.get('url', 'N/A')}\n"
-            f"   Title: {result.get('title', 'N/A')}\n"
-            f"   Description: {result.get('description', 'N/A')}"
-        )
-
-    prompt_text = f"""
-You are an expert at identifying the official homepage of a company from a list of search engine results.
-Given the company name "{company_name}" and the following search results, please select the number corresponding to the URL that is most likely the official homepage.
-
-Consider the URL structure, domain name, title, and description to make your choice.
-The official homepage is typically the primary website owned and operated by the company itself, not a news article, directory listing (unless it's a highly official business register), or social media page.
-
-If none of the URLs seem to be the official homepage, or if you are unsure, respond with "None".
-Only respond with the number of the best choice or "None".
-
-Search Results:
-{chr(10).join(formatted_results)}
-
-Company Name: "{company_name}"
-Which number corresponds to the most likely official homepage? Respond with the number only, or "None".
-    """
-    try:
-        response = llm.invoke(prompt_text)
-        selected_choice = response.content.strip().lower()
-
-        if selected_choice == "none":
-            return None
-
-        if selected_choice.isdigit():
-            selected_index = int(selected_choice) - 1
-            if 0 <= selected_index < len(search_results):
-                chosen_url = search_results[selected_index].get("url")
-                print(f"LLM selected URL ({selected_choice}): {chosen_url} for company: {company_name}")
-                return chosen_url
-            else:
-                print(f"LLM selected an out-of-bounds index: {selected_choice} for {company_name}", file=sys.stderr)
-                return None
-        else:
-            for i, result in enumerate(search_results):
-                if result.get("url") in selected_choice:
-                    print(f"LLM selected URL by finding it in a non-numeric response: {result.get('url')} for {company_name}")
-                    return result.get("url")
-            print(f"LLM response for URL selection was not a valid number or 'None' for {company_name}: '{selected_choice}'", file=sys.stderr)
-            return None
-    except Exception as e:
-        print(f"Error during LLM call for URL selection for {company_name}: {e}", file=sys.stderr)
-        return None
-
-
-def get_brave_search_candidates(company: str, api_key: str, count: int = 5) -> List[Dict[str, Any]]:
-    """
-    Fetches potential candidate URLs from Brave Search API using the provided api_key.
-    Returns a list of dictionaries, where each dictionary contains 'url', 'title', 'description'.
-    """
-    if not api_key:
-        print("Error: BRAVE_API_KEY not provided for Brave Search.", file=sys.stderr)
-        return []
-
-    headers = {
-        "Accept": "application/json",
-        "X-Subscription-Token": api_key
-    }
-    params = {
-        "q": f'"{company}" homepage official site',
-        "count": count,
-        "country": "ch",
-        "search_lang": "de",
-        "spellcheck": "false"
-    }
-
-    candidate_results = []
-    try:
-        print(f"Querying Brave Search for: '{params['q']}' with country '{params['country']}'")
-        resp = httpx.get(SEARCH_URL, headers=headers, params=params, timeout=10.0)
-        resp.raise_for_status()
-        results_json = resp.json().get("web", {}).get("results", [])
-
-        for r in results_json:
-            url = r.get("url")
-            title = r.get("title")
-            description = r.get("description")
-
-            if not url:
-                continue
-            parsed_url = urlparse(url)
-            host = parsed_url.hostname or ""
-            if not host or any(domain in host for domain in BLACKLIST):
-                continue
-
-            company_main_name_part = company.lower().split(" ")[0].replace(",", "").replace(".", "")
-            company_name_no_spaces = company.lower().replace(" ", "").replace(".", "").replace(",", "")
-            host_cleaned = host.lower()
-            
-            candidate_results.append({
-                "url": url, "title": title, "description": description,
-                "is_ch_domain": host.endswith(".ch"),
-                "company_match_in_host": (company_main_name_part in host_cleaned) or \
-                                         (company_name_no_spaces in host_cleaned) or \
-                                         (host_cleaned.startswith(company_main_name_part)) or \
-                                         (host_cleaned.startswith(company_name_no_spaces))
-            })
-        candidate_results.sort(key=lambda x: (not x["is_ch_domain"], not x["company_match_in_host"]))
-        print(f"Found {len(candidate_results)} potential candidates for '{company}' from Brave Search.")
-        return candidate_results
-    except httpx.RequestError as e:
-        print(f"Brave Search API request error for {company}: {e}", file=sys.stderr)
-    except httpx.HTTPStatusError as e:
-        print(f"Brave Search API returned an error for {company}: {e.response.status_code} - {e.response.text}", file=sys.stderr)
-    except json.JSONDecodeError:
-        print(f"Brave Search API response was not valid JSON for {company}.", file=sys.stderr)
-    except Exception as e:
-        print(f"An unexpected error occurred in get_brave_search_candidates for {company}: {e}", file=sys.stderr)
-    return []
-
-
-def get_wikidata_homepage(company: str) -> str | None:
-    """Fetches company homepage from Wikidata."""
-    params_search = {"action": "wbsearchentities", "format": "json", "language": "de", "uselang": "de", "type": "item", "search": company}
-    try:
-        r_search = httpx.get(WIKIDATA_SEARCH, params=params_search, timeout=5.0)
-        r_search.raise_for_status()
-        search_results = r_search.json().get("search", [])
-        if not search_results: return None
-
-        qid = None
-        for res in search_results:
-            res_label = res.get("label", "").lower()
-            res_aliases = [alias.get("value", "").lower() for alias in res.get("aliases", []) if alias.get("value")]
-            if company.lower() == res_label or company.lower() in res_aliases:
-                qid = res.get("id")
-                break
-        if not qid: # Fallback matching logic
-            for res in search_results:
-                if company.lower() in res.get("label", "").lower(): qid = res.get("id"); break
-        if not qid and search_results:
-            first_with_desc = next((res.get("id") for res in search_results if res.get("description")), None)
-            qid = first_with_desc or search_results[0].get("id")
-        if not qid: return None
-
-        params_claims = {"action": "wbgetclaims", "format": "json", "entity": qid, "property": "P856"}
-        r_claims = httpx.get(WIKIDATA_ENTITY, params=params_claims, timeout=5.0)
-        r_claims.raise_for_status()
-        claims_data = r_claims.json().get("claims", {}).get("P856", [])
-        if not claims_data: return None
-
-        mainsnak = claims_data[0].get("mainsnak")
-        if mainsnak and mainsnak.get("datavalue") and isinstance(mainsnak["datavalue"].get("value"), str):
-            url = mainsnak["datavalue"]["value"]
-            if url.startswith(("http://", "https://")):
-                parsed_url = urlparse(url)
-                if parsed_url.hostname and not any(domain in parsed_url.hostname for domain in BLACKLIST):
-                    print(f"Wikidata found URL: {url} for {company} (QID: {qid})")
-                    return url
-    except httpx.RequestError as e:
-        print(f"Wikidata API request error for {company}: {e}", file=sys.stderr)
-    except httpx.HTTPStatusError as e:
-        print(f"Wikidata API returned an error for {company}: {e.response.status_code} - {e.response.text}", file=sys.stderr)
-    except json.JSONDecodeError:
-        print(f"Wikidata API response was not valid JSON for {company}.", file=sys.stderr)
-    except Exception as e:
-        print(f"An unexpected error occurred in get_wikidata_homepage for {company}: {e}", file=sys.stderr)
-    return None
-
+# Functions select_best_url_with_llm, get_brave_search_candidates, get_wikidata_homepage
+# have been moved to search_common.py and will be imported from there.
 
 async def process_company_data(company_name: str, company_number: str) -> Dict[str, Any]:
     """
@@ -238,10 +70,12 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
 
     if BRAVE_API_KEY_GLOBAL:
         print(f"\nAttempting to find URL for '{company_name}' using Brave Search...")
-        brave_candidates = get_brave_search_candidates(company_name, api_key=BRAVE_API_KEY_GLOBAL, count=5)
+        # Use imported function, pass BRAVE_API_KEY_GLOBAL as brave_api_key argument
+        brave_candidates = get_brave_search_candidates(company_name, brave_api_key=BRAVE_API_KEY_GLOBAL, count=5)
         if brave_candidates:
             if llm_url_selector:
                 print(f"Found {len(brave_candidates)} Brave candidates for '{company_name}'. Asking LLM to select...")
+                # Use imported function, pass llm_url_selector as llm argument
                 company_url = select_best_url_with_llm(company_name, brave_candidates, llm_url_selector)
                 if company_url: source_of_url = "Brave Search + LLM"
                 else: print(f"LLM did not select a URL for '{company_name}'. Applying Brave heuristic fallback.")
@@ -266,6 +100,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
     if not company_url:
         status_msg = f"Previous method ({source_of_url})" if source_of_url != "None" else "Brave Search skipped or failed"
         print(f"{status_msg} did not yield a URL for '{company_name}'. Trying Wikidata...")
+        # Use imported function
         company_url = get_wikidata_homepage(company_name)
         if company_url: source_of_url = "Wikidata"
 
@@ -316,19 +151,35 @@ Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht
 Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
 
 Fakten zu sammeln:
+    • Aktueller CEO / Geschäftsführer
+    • Gründer (Komma-getrennt bei mehreren)
+    • Inhaber (Besitzer der Firma)
+    • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250", "ca. 500")
+    • Gründungsjahr (JJJJ)
     • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
+    • Was macht diese Firma besser als ihre Konkurrenz (Stichworte, maximal 10 Wörter)
     • Addresse Hauptsitz (vollständige Adresse)
+    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX oder HRB XXXXX etc.)
     • Haupt-Telefonnummer (internationales Format wenn möglich)
     • Haupt-Emailadresse (allgemeine Kontakt-Email)
+    • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
 
 Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor
 oder danach:
 
 {{
   "official_website": "{root_url_for_prompt}",
+  "ceo": "<name oder null>",
+  "founder": "<name(s) oder null>",
+  "owner": "<name(s) oder null>",
+  "employees": "<zahl/bereich oder null>",
+  "founded": "<jahr oder null>",
+  "better_then_the_rest": "<text oder null>",
   "Hauptsitz": "<Strasse Nr, Postleitzahl, Ort>",
+  "Firmenidentifikationsnummer": "<ID oder null>",
   "HauptTelefonnummer": "<nummer oder null>",
   "HauptEmailAdresse": "<email oder null>",
+  "Geschäftsbericht" : "<url/PDF-Link oder null>"
 }}
 """
     print(f"\nÜbermittelter Prompt an den Agenten für '{company_name}' (Auszug):")
