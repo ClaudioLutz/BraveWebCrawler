@@ -33,7 +33,7 @@ EXPECTED_JSON_KEYS = [
 ]
 
 # Enable mcp_use debug logging
-Logger.set_debug(2)
+Logger.set_debug(1)
 
 
 def select_best_url_with_llm(company_name: str, search_results: List[Dict[str, Any]], llm: ChatOpenAI) -> str | None:
