@@ -316,35 +316,19 @@ Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht
 Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
 
 Fakten zu sammeln:
-    • Aktueller CEO / Geschäftsführer
-    • Gründer (Komma-getrennt bei mehreren)
-    • Inhaber (Besitzer der Firma)
-    • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250", "ca. 500")
-    • Gründungsjahr (JJJJ)
     • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
-    • Was macht diese Firma besser als ihre Konkurrenz (Stichworte, maximal 10 Wörter)
     • Addresse Hauptsitz (vollständige Adresse)
-    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX oder HRB XXXXX etc.)
     • Haupt-Telefonnummer (internationales Format wenn möglich)
     • Haupt-Emailadresse (allgemeine Kontakt-Email)
-    • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
 
 Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor
 oder danach:
 
 {{
   "official_website": "{root_url_for_prompt}",
-  "ceo": "<name oder null>",
-  "founder": "<name(s) oder null>",
-  "owner": "<name(s) oder null>",
-  "employees": "<zahl/bereich oder null>",
-  "founded": "<jahr oder null>",
-  "better_then_the_rest": "<text oder null>",
-  "Hauptsitz": "<text oder null>",
-  "Firmenidentifikationsnummer": "<ID oder null>",
+  "Hauptsitz": "<Strasse Nr, Postleitzahl, Ort>",
   "HauptTelefonnummer": "<nummer oder null>",
   "HauptEmailAdresse": "<email oder null>",
-  "Geschäftsbericht" : "<url/PDF-Link oder null>"
 }}
 """
     print(f"\nÜbermittelter Prompt an den Agenten für '{company_name}' (Auszug):")
