@@ -32,7 +32,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ### 1. Clone or Download the Project
 ```bash
 git clone <repository-url>
-cd startpage-search-agent
+cd BraveWebCrawler
 ```
 
 ### 2. Create and Activate Virtual Environment
@@ -86,6 +86,13 @@ brave-search "Nestlé"
 brave-search "Credit Suisse"
 ```
 
+### Batch CSV Usage
+For processing multiple companies at once, run:
+```bash
+python company_processor.py input.csv output.csv
+```
+The input CSV must have the columns `company_number` and `company_name` with a header row.
+
 ### Expected Output
 The script returns a JSON object with the following company information:
 ```json
@@ -97,10 +104,11 @@ The script returns a JSON object with the following company information:
   "employees": "1000-1500",
   "founded": "1995",
   "better_then_the_rest": "innovative technology solutions",
-  "Standorte": ["Zurich", "Geneva", "Basel"],
+  "Hauptsitz": "Bahnhofstrasse 1, 8001 Zürich",
   "Firmenidentifikationsnummer": "CHE-123.456.789",
   "HauptTelefonnummer": "+41 44 123 45 67",
-  "HauptEmailAdresse": "info@company.com"
+  "HauptEmailAdresse": "info@company.com",
+  "Geschäftsbericht": "https://company.com/annual-report.pdf"
 }
 ```
 
@@ -192,14 +200,15 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 
 ## File Structure
 ```
-brave-search-agent/
-├── brave_search.py          # Main script
+BraveWebCrawler/
+├── brave_search.py          # CLI script for single search
+├── company_processor.py     # Batch processing from CSV
 ├── startpage_mcp.json       # MCP server configuration
-├── .env                     # Environment variables (not tracked)
-├── .gitignore              # Git ignore file
-├── README.md               # This file
-├── DOCUMENTATION.md        # Detailed technical documentation
-└── venv312/               # Python virtual environment (not tracked)
+├── pyproject.toml           # Package setup
+├── requirements.txt         # Dependencies
+├── README.md
+├── DOCUMENTATION.md
+└── ...
 ```
 
 ## Contributing
