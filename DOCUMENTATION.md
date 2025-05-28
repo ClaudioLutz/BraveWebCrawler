@@ -121,6 +121,135 @@ The `startpage_mcp.json` file configures the Playwright MCP server:
 3. **Tool Execution**: Agent uses tools to navigate and extract data
 4. **Data Return**: Results are passed back through MCP protocol
 
+## Playwright MCP Server Setup
+
+The Brave Search Company Agent uses Playwright’s Model Context Protocol (MCP) server over stdio to drive browser automation. A transient regression in `@playwright/mcp` v0.0.27 mandates pinning to v0.0.26 until upstream fixes the issue.
+
+### 1. Pin MCP Server Version
+
+In your `startpage_mcp.json`, ensure you explicitly request v0.0.26:
+
+```jsonc
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.26"]
+    }
+  }
+}
+```
+
+> **Why?** v0.0.27 contains a bug that prevents the server from initializing correctly over stdio. Pinning ensures a known-good handshake.
+
+### 2. Install MCP Package & Browsers
+
+Run these commands **once** to install the MCP server and the required Playwright browsers:
+
+```bash
+# Install the MCP wrapper globally (optional; local install also works)
+npm install -g @playwright/mcp@0.0.26
+
+# Download Chromium (required for browser automation)
+npx playwright install chromium
+```
+
+* The first command fetches the MCP CLI (≈300 MB download on first run).
+* The second command installs the browser binaries Playwright will drive.
+
+### 3. Automatic Initialization in Python
+
+Your Python code, via `mcp_use`, will now launch:
+
+```python
+from mcp_use import MCPClient, MCPAgent
+from mcp_use.logging import Logger
+from langchain_openai import ChatOpenAI
+
+Logger.set_debug(2)  # verbose MCP protocol logging
+
+client = MCPClient.from_config_file("startpage_mcp.json")
+llm    = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
+agent  = MCPAgent(llm=llm, client=client, max_steps=30)
+
+# When you call agent.run(), mcp_use will:
+#  1. spawn `npx @playwright/mcp@0.0.26`
+#  2. send a framed initialize request (with Content-Length, protocolVersion, capabilities, clientInfo)
+#  3. receive and log the initialize result
+#  4. proceed with browser commands
+```
+
+You should see in your console:
+
+```
+DEBUG → initialize (Content-Length: xxx)
+DEBUG ← initialize result ✔
+DEBUG Session initialized ✔
+```
+
+at which point the agent will drive Playwright without hanging.
+
+### 4. Manual Server Verification (Optional)
+
+If you need to confirm the MCP server is responding correctly outside Python:
+
+1. Create an `init.json` file with a valid LSP initialize payload:
+
+   ```bash
+   cat << 'EOF' > init.json
+   {"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+      "protocolVersion":"1.0.0",
+      "capabilities":{},
+      "clientInfo":{"name":"mcp_manual_test","version":"1.0.0"}
+   }}
+   EOF
+   ```
+
+2. Send it with proper LSP framing:
+
+   ```bash
+   length=$(wc -c < init.json)
+   printf 'Content-Length: %d\r\n\r\n' "$length"
+   cat init.json \
+     | npx -y @playwright/mcp@0.0.26
+   ```
+
+3. A successful response will look like:
+
+   ```json
+   {"jsonrpc":"2.0","id":0,"result":{"capabilities":{…}}}
+   ```
+
+If you see that, the server is healthy and ready for your Python client.
+
+### 5. Troubleshooting
+
+* **No initialize response?**
+
+  * ✔️ Confirm you pinned to `@playwright/mcp@0.0.26`.
+  * ✔️ Ensure `npx --version` and `node --version` are v16+ and on your PATH.
+  * ✔️ Run `npx playwright install chromium` again to verify browsers are installed.
+* **Permission or exec errors on Windows?**
+
+  * In PowerShell run:
+
+    ```powershell
+    Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+    ```
+  * Or launch your script from CMD rather than Git Bash.
+* **Still hanging in Python logs at “Initializing MCP session”?**
+
+  * Upgrade your `mcp_use` client:
+
+    ```bash
+    pip install --upgrade mcp_use
+    ```
+  * Verify your `startpage_mcp.json` contains **no** obsolete flags like `--stdio`.
+
+---
+
+With these steps in place, your MCPAgent will complete its handshake and seamlessly control Playwright for full end-to-end company data extraction.
+
 ## Prompt Engineering
 
 ### Search Strategy

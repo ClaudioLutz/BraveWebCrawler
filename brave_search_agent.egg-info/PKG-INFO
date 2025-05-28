@@ -215,6 +215,7 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 BraveWebCrawler/
 ├── brave_search.py          # CLI script for single search
 ├── company_processor.py     # Batch processing from CSV
+├── search_common.py         # Shared utilities for Brave/Wikidata search & LLM URL selection
 ├── startpage_mcp.json       # MCP server configuration
 ├── pyproject.toml           # Package setup
 ├── requirements.txt         # Dependencies

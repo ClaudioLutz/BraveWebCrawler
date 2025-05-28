@@ -134,6 +134,61 @@ OPENAI_API_KEY=your_key_here
 GOOGLE_API_KEY=your_key_here
 ```
 
+## Playwright MCP Server Setup
+
+The crawler relies on Playwright’s MCP server over stdio. Due to a temporary regression in v0.0.27, we pin to v0.0.26 until it’s fixed.
+
+### 1. Pin the MCP version
+
+In your `startpage_mcp.json`, change the MCP server entry to:
+
+```jsonc
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.26"]
+    }
+  }
+}
+```
+
+### 2. Install the MCP package and browsers
+
+Run **once** (you can skip `-g` if you prefer local installs):
+
+```bash
+npm i -g @playwright/mcp@0.0.26
+npx playwright install chromium
+```
+
+This downloads the MCP server and the Chromium browser binaries.
+
+### 3. Verify the server is reachable
+
+(Optional) You can test that the server will accept an LSP‐style initialize over stdio:
+
+```bash
+cat << 'EOF' > init.json
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+   "protocolVersion":"1.0.0",
+   "capabilities":{},
+   "clientInfo":{"name":"mcp_manual_test","version":"1.0.0"}
+}}
+EOF
+
+length=$(wc -c < init.json)
+printf 'Content-Length: %d\r\n\r\n' "$length"
+cat init.json \
+  | npx -y @playwright/mcp@0.0.26
+```
+
+You should get back a JSON‐RPC `result` message. If you see it, the server is healthy and your Python client will be able to complete the handshake.
+
+---
+
+Once that’s in place, your Python script’s `MCPAgent` will move past the “Initializing MCP session” hang and begin driving Playwright automatically.
+
 ## Troubleshooting
 
 ### Common Issues
