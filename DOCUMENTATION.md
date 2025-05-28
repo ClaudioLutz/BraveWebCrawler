@@ -86,6 +86,13 @@ python company_processor.py input.csv output.csv
 ```
 The input file must have `company_number` and `company_name` columns.
 
+#### 6. Shared Search Utilities (`search_common.py`)
+This module consolidates common functionalities for finding company URLs, including:
+- Querying the Brave Search API (`get_brave_search_candidates`).
+- Querying the Wikidata API (`get_wikidata_homepage`).
+- Using an LLM to select the best URL from candidates (`select_best_url_with_llm`).
+These functions are parameterized to accept API keys and LLM instances directly.
+
 ## MCP (Model Context Protocol) Integration
 
 ### What is MCP?
@@ -165,19 +172,21 @@ Fakten zu sammeln:
 
 ### URL Discovery Functions
 
+The core logic for URL discovery now resides in `search_common.py`. Functions such as `get_brave_search_candidates` and `select_best_url_with_llm` are designed to receive necessary API keys or LLM instances as parameters.
+
 #### Brave Search Implementation
 ```python
-def get_brave_homepage(company: str, count: int = 10) -> str | None:
+def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5) -> List[Dict[str, Any]]:
     """Fetches company homepage using Brave Search API."""
     headers = {
         "Accept": "application/json",
-        "X-Subscription-Token": BRAVE_API_KEY
+        "X-Subscription-Token": brave_api_key
     }
-    params = {"q": f'"{company}" offizielle Webseite Schweiz', "count": count}
+    params = {"q": f'"{company}" homepage official site', "count": count, "country": "ch", "search_lang": "de"}
     # Implementation includes candidate filtering and blacklist checking
 ```
 
-#### Wikidata Fallback Implementation
+#### Wikidata Fallback Implementation (`get_wikidata_homepage`)
 ```python
 def get_wikidata_homepage(company: str) -> str | None:
     """Fetches company homepage from Wikidata."""
@@ -244,6 +253,7 @@ Logger.set_debug(2)  # DEBUG level messages (full verbose)
 
 ### API Key Management
 - Store keys in `.env` file (never commit to version control)
+- Application logic, particularly shared utility functions in `search_common.py`, is designed to receive API keys and configured LLM instances as parameters, promoting better encapsulation.
 - Use environment-specific keys for development/production
 - Implement key rotation policies
 
