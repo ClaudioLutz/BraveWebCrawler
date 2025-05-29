@@ -26,6 +26,8 @@ graph TD
     K --> F
 ```
 
+The diagram above illustrates the flow for a single company lookup, typically initiated by `brave_search.py` or a single process within `company_processor.py`. The system also includes `company_parallel_processor.py`, which processes multiple companies in parallel, with each parallel process following a similar architecture to the one depicted.
+
 ### Technology Stack
 
 - **Python 3.11+**: Main runtime environment
@@ -80,11 +82,17 @@ agent = MCPAgent(llm=llm, client=client, max_steps=30)
 ```
 
 #### 5. Batch Processing
-Use `company_processor.py` to process many companies from a CSV file:
-```bash
-python company_processor.py input.csv output.csv
-```
-The input file must have `company_number` and `company_name` columns.
+The system provides two scripts for processing multiple companies from a CSV file:
+
+- **Sequential Processing (`company_processor.py`)**:
+  Use `company_processor.py` to process companies one after another. This is suitable for smaller lists or when sequential execution is preferred.
+  ```bash
+  python company_processor.py input.csv output.csv
+  ```
+  The input file must have `company_number` and `company_name` columns.
+
+- **Parallel Processing (`company_parallel_processor.py`)**:
+  For larger datasets, `company_parallel_processor.py` offers significantly faster processing by handling multiple companies concurrently. See component #7 below for more details on its usage and benefits.
 
 #### 6. Shared Search Utilities (`search_common.py`)
 This module consolidates common functionalities for finding company URLs, including:
@@ -92,6 +100,17 @@ This module consolidates common functionalities for finding company URLs, includ
 - Querying the Wikidata API (`get_wikidata_homepage`).
 - Using an LLM to select the best URL from candidates (`select_best_url_with_llm`).
 These functions are parameterized to accept API keys and LLM instances directly.
+
+#### 7. Parallel Batch Processing (`company_parallel_processor.py`)
+This script is designed for processing a large number of companies from a CSV file concurrently. It utilizes the `multiprocessing` module to distribute the workload across multiple CPU cores, significantly speeding up the data extraction process for large datasets. Each worker process handles a subset of companies, independently performing URL discovery (via `search_common.py`) and data extraction using an `MCPAgent`.
+
+Usage:
+```bash
+python company_parallel_processor.py input.csv output.csv --workers <num_workers>
+```
+- `input.csv`: Path to the input CSV file (must contain `company_number` and `company_name` columns).
+- `output.csv`: Path where the results will be saved.
+- `--workers <num_workers>`: Optional. Number of worker processes to use. Defaults to the number of CPU cores.
 
 ## MCP (Model Context Protocol) Integration
 
@@ -381,8 +400,8 @@ Logger.set_debug(2)  # DEBUG level messages (full verbose)
 ## Security Considerations
 
 ### API Key Management
-- Store keys in `.env` file (never commit to version control)
-- Application logic, particularly shared utility functions in `search_common.py`, is designed to receive API keys and configured LLM instances as parameters, promoting better encapsulation.
+- Store keys in `.env` file (never commit to version control) The main scripts (e.g., `brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) are responsible for loading these keys from the `.env` file.
+- Shared utility functions, such as those in `search_common.py`, are designed to receive these API keys (and configured LLM instances, where applicable) as parameters from the calling script. This promotes better encapsulation and makes the utility functions more testable and flexible.
 - Use environment-specific keys for development/production
 - Implement key rotation policies
 
@@ -588,6 +607,29 @@ async def test_company_search():
 | `OpenAI authentication` | Check API key in .env file |
 | `MCP connection timeout` | Verify npx and internet connection |
 | `Browser automation fails` | Check website accessibility |
+
+## File Structure
+
+A brief overview of the key files and directories in the project:
+
+```
+BraveWebCrawler/
+├── .env                     # Environment variables (API keys, etc.) - Not version controlled
+├── .gitignore               # Specifies intentionally untracked files that Git should ignore
+├── brave_search.py          # CLI script for single company search and data extraction
+├── company_processor.py     # Script for batch processing companies from a CSV file sequentially
+├── company_parallel_processor.py # Script for batch processing companies from a CSV file in parallel
+├── search_common.py         # Common utility functions for URL discovery (Brave, Wikidata, LLM selection)
+├── startpage_mcp.json       # Configuration for the Playwright MCP server
+├── pyproject.toml           # Project metadata and build system configuration (PEP 518)
+├── requirements.txt         # Python package dependencies
+├── README.md                # User-facing documentation: overview, setup, usage
+├── DOCUMENTATION.md         # Detailed technical documentation (this file)
+├── brave_search_agent.egg-info/ # Packaging metadata generated by setuptools
+└── __pycache__/             # Python bytecode cache
+```
+
+(Note: Some generated files like `__pycache__` and `.egg-info` are typically gitignored but listed for completeness of what might be seen locally.)
 
 ## Future Enhancements
 
