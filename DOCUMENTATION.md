@@ -608,6 +608,91 @@ async def test_company_search():
 | `MCP connection timeout` | Verify npx and internet connection |
 | `Browser automation fails` | Check website accessibility |
 
+### MCPAgent Browser Session Hangs
+
+If the crawler hangs at "creating new ones…" when initializing the MCPAgent's browser session, follow these steps:
+
+1. **Install Playwright and browsers**
+
+   * Ensure the Python package is installed:
+
+     ```bash
+     pip install playwright
+     ```
+   * Install browser binaries (from a plain CMD prompt in your venv):
+
+     ```bat
+     playwright install
+     ```
+   * Confirm installation:
+
+     ```bat
+     playwright --version
+     playwright install --help
+     ```
+
+2. **Test Playwright in isolation**
+   Create `pw_test.py`:
+
+   ```python
+   import asyncio
+   from playwright.async_api import async_playwright
+
+   async def main():
+       async with async_playwright() as p:
+           browser = await p.chromium.launch()
+           page = await browser.new_page()
+           await page.goto("https://example.com")
+           print("PAGE TITLE:", await page.title())
+           await browser.close()
+
+   if __name__ == "__main__":
+       asyncio.run(main())
+   ```
+
+   Run it:
+
+   ```bash
+   python pw_test.py
+   ```
+
+   You should see:
+
+   ```
+   PAGE TITLE: Example Domain
+   ```
+
+3. **Shell/Policy issues on Windows**
+
+   * If PowerShell blocks activation scripts, use the `.bat` activator in CMD:
+
+     ```bat
+     venv312\Scripts\activate.bat
+     ```
+   * Or temporarily relax PowerShell policy:
+
+     ```powershell
+     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+     .\venv312\Scripts\Activate.ps1
+     ```
+
+4. **Add a timeout to MCPAgent** (optional)
+   To prevent indefinite hangs, wrap the agent call:
+
+   ```python
+   import asyncio
+
+   try:
+       result = await asyncio.wait_for(
+           agent.run(prompt, max_steps=30),
+           timeout=300
+       )
+   except asyncio.TimeoutError:
+       # handle timeout
+   ```
+
+With these steps, Playwright will be able to launch Chromium and the crawler will proceed past the startup hang. Feel free to adjust logging levels or reuse the agent across multiple companies to optimize performance.
+
 ## File Structure
 
 A brief overview of the key files and directories in the project:
