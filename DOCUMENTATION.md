@@ -161,22 +161,58 @@ In your `startpage_mcp.json`, ensure you explicitly request v0.0.26:
 
 > **Why?** v0.0.27 contains a bug that prevents the server from initializing correctly over stdio. Pinning ensures a known-good handshake.
 
-### 2. Install MCP Package & Browsers
+### 2. Install MCP Package
 
-Run these commands **once** to install the MCP server and the required Playwright browsers:
+Run this command **once** to install the MCP server:
 
 ```bash
 # Install the MCP wrapper globally (optional; local install also works)
 npm install -g @playwright/mcp@0.0.26
-
-# Download Chromium (required for browser automation)
-npx playwright install chromium
 ```
 
-* The first command fetches the MCP CLI (≈300 MB download on first run).
-* The second command installs the browser binaries Playwright will drive.
+* This command fetches the MCP CLI (≈300 MB download on first run).
 
-### 3. Automatic Initialization in Python
+### 3. Install the Playwright browsers
+
+> **Important:** The Playwright CLI can hang or misbehave in Git-Bash/MINGW64. Use PowerShell or cmd.exe for this step.
+
+1. **Activate your virtual environment**  
+   Make sure you’re inside your project folder (where `venv312` lives), then run _exactly one_ of these, depending on your shell:
+
+   - **PowerShell**  
+     ```powershell
+     # (just once per session, to allow scripts)
+     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+
+     # activate venv
+     .\venv312\Scripts\Activate.ps1
+     ```
+   - **Command Prompt (cmd.exe)**  
+     ```cmd
+     venv312\Scripts\activate.bat
+     ```
+   - **Git Bash / WSL / other POSIX-like shells**  
+     ```bash
+     source venv312/Scripts/activate
+     ```
+
+   After activation you should see `(venv312)` at the start of your prompt.
+
+2. **Install the browsers**  
+   Now that your venv is active in PowerShell or cmd.exe, run:
+   ```bash
+   python -m playwright install
+   ```
+   This will download the Chromium, Firefox, and WebKit binaries that Playwright needs.
+
+3. **Verify the installation**
+   ```bash
+   playwright --version
+   playwright install --help
+   ```
+   If those commands print help text or a version number, you’re good to go!
+
+### 4. Automatic Initialization in Python
 
 Your Python code, via `mcp_use`, will now launch:
 

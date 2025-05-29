@@ -153,18 +153,56 @@ In your `startpage_mcp.json`, change the MCP server entry to:
 }
 ```
 
-### 2. Install the MCP package and browsers
+### 2. Install the MCP package
 
 Run **once** (you can skip `-g` if you prefer local installs):
 
 ```bash
 npm i -g @playwright/mcp@0.0.26
-npx playwright install chromium
 ```
+This downloads the MCP server package.
 
-This downloads the MCP server and the Chromium browser binaries.
+### 3. Install the Playwright browsers
 
-### 3. Verify the server is reachable
+> **Important:** The Playwright CLI can hang or misbehave in Git-Bash/MINGW64. Use PowerShell or cmd.exe for this step.
+
+1. **Activate your virtual environment**  
+   Make sure you’re inside your project folder (where `venv312` lives), then run _exactly one_ of these, depending on your shell:
+
+   - **PowerShell**  
+     ```powershell
+     # (just once per session, to allow scripts)
+     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+
+     # activate venv
+     .\venv312\Scripts\Activate.ps1
+     ```
+   - **Command Prompt (cmd.exe)**  
+     ```cmd
+     venv312\Scripts\activate.bat
+     ```
+   - **Git Bash / WSL / other POSIX-like shells**  
+     ```bash
+     source venv312/Scripts/activate
+     ```
+
+   After activation you should see `(venv312)` at the start of your prompt.
+
+2. **Install the browsers**  
+   Now that your venv is active in PowerShell or cmd.exe, run:
+   ```bash
+   python -m playwright install
+   ```
+   This will download the Chromium, Firefox, and WebKit binaries that Playwright needs.
+
+3. **Verify the installation**
+   ```bash
+   playwright --version
+   playwright install --help
+   ```
+   If those commands print help text or a version number, you’re good to go!
+
+### 4. Verify the server is reachable
 
 (Optional) You can test that the server will accept an LSP‐style initialize over stdio:
 

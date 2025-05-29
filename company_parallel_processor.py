@@ -9,9 +9,10 @@ from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from mcp_use.logging import Logger
 from langchain_openai import ChatOpenAI
+from pydantic.types import SecretStr # Added for API key handling
 # import httpx # Moved to search_common
 from urllib.parse import urlparse # Still needed
-# from typing import List, Dict, Any # Moved to search_common
+from typing import Dict, Any # Moved to search_common, but still needed here for type hints
 
 # Load environment variables from .env file
 load_dotenv()
@@ -57,7 +58,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
     if OPENAI_API_KEY_GLOBAL:
         try:
             llm_url_selector = ChatOpenAI(
-                model="gpt-4.1-mini", temperature=0, api_key=OPENAI_API_KEY_GLOBAL
+                model="gpt-4.1-mini", temperature=0, api_key=SecretStr(OPENAI_API_KEY_GLOBAL)
             )
             print(f"LLM for URL selection initialized for '{company_name}'.")
         except Exception as e:
@@ -129,7 +130,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
 
     agent_llm = None
     try:
-        agent_llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0, api_key=OPENAI_API_KEY_GLOBAL)
+        agent_llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0, api_key=SecretStr(OPENAI_API_KEY_GLOBAL))
         print(f"LLM for MCPAgent initialized for '{company_name}'.")
     except Exception as e:
         print(f"Error initializing LLM for MCPAgent for '{company_name}': {e}. Agent cannot run.", file=sys.stderr)
