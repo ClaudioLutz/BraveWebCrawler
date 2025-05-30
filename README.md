@@ -118,13 +118,26 @@ The script returns a JSON object with the following company information:
 ## Configuration Files
 
 ### startpage_mcp.json
-Configures the MCP server connection:
+Configures the MCP server connection for single-threaded scripts:
 ```json
 {
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"]
+      "args": ["-y", "@playwright/mcp@0.0.26"]
+    }
+  }
+}
+```
+
+### parallel_mcp_launcher.json
+Template MCP configuration for parallel processing. The actual configuration used at runtime is dynamically generated.
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "<path_to_runtime_playwright_config.json>"]
     }
   }
 }
@@ -297,15 +310,18 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 ## File Structure
 ```
 BraveWebCrawler/
-├── brave_search.py          # CLI script for single search
-├── company_processor.py     # Batch processing from CSV
-├── search_common.py         # Shared utilities for Brave/Wikidata search & LLM URL selection
-├── startpage_mcp.json       # MCP server configuration
-├── pyproject.toml           # Package setup
-├── requirements.txt         # Dependencies
-├── README.md
-├── DOCUMENTATION.md
-└── ...
+├── .env                     # Environment variables (API keys, etc.)
+├── brave_search.py          # CLI script for single company search
+├── company_processor.py     # Script for sequential batch processing
+├── company_parallel_processor.py # Script for parallel batch processing
+├── search_common.py         # Common URL discovery utilities
+├── startpage_mcp.json       # MCP config for single-threaded scripts
+├── parallel_mcp_launcher.json # Template MCP config for parallel script
+├── pyproject.toml           # Project metadata and package setup
+├── requirements.txt         # Python package dependencies
+├── README.md                # This file
+├── DOCUMENTATION.md         # Detailed technical documentation
+└── ... (other generated files like __pycache__, .egg-info, venv312/)
 ```
 
 ## Contributing

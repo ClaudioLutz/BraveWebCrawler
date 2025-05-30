@@ -10,26 +10,62 @@ This document provides detailed technical information about the Brave Search Com
 
 ```mermaid
 graph TD
-    A[brave_search.py / company_processor.py / company_parallel_processor.py] --> B[Brave Search API]
-    A --> C[Wikidata API]
-    A --> D[MCP Client]
-    D --> E[Playwright MCP Server]
-    E --> F[Browser Automation]
-    A --> G[OpenAI LLM]
-    A --> H[Environment Config]
-    H --> I[.env file]
-    H --> J[parallel_mcp_launcher.json (template for parallel) / startpage_mcp.json (for sequential)] 
-    J --> J1[Dynamically generated runtime-mcp-launcher.json (parallel only)]
-    J1 --> J2[Dynamically generated runtime-playwright-config.json (specifies unique userDataDir, parallel only)]
-    J2 --> E
+    subgraph "Core Logic & APIs"
+        A[Python Scripts: brave_search.py, company_processor.py, company_parallel_processor.py]
+        B[Brave Search API]
+        C[Wikidata API]
+        G[OpenAI LLM]
+        H[Environment Config (.env)]
+    end
+
+    subgraph "MCP Client & Server Interaction"
+        D[MCP Client (in Python scripts)]
+        E[Playwright MCP Server (npx @playwright/mcp)]
+        F[Browser Automation (Playwright)]
+    end
+
+    subgraph "MCP Configuration"
+        J_seq[startpage_mcp.json (Sequential Processing)]
+        J_par_template[parallel_mcp_launcher.json (Parallel Processing Template)]
+        J1_runtime_launcher[Dynamically generated runtime-mcp-launcher.json (Parallel Only)]
+        J2_runtime_playwright_config[Dynamically generated runtime-playwright-config.json (Parallel Only, specifies unique userDataDir)]
+    end
+
+    A --> B
+    A --> C
+    A --> G
+    A --> H
+    A --> D
+
+    D -- Sequential --> J_seq
+    J_seq --> E
+
+    D -- Parallel --> J_par_template
+    J_par_template -- Used to create --> J1_runtime_launcher
+    J1_runtime_launcher -- References --> J2_runtime_playwright_config
+    J1_runtime_launcher --> E
+    J2_runtime_playwright_config -- Configures --> E
+
+    E --> F
+    F --> L[Company Website Interaction]
     B --> K[Official Website URL]
     C --> K
-    F --> L[Company Website]
-    G --> M[JSON Output]
     K --> F
+    G --> M[JSON Output]
 ```
 
-The diagram above illustrates the flow for a company lookup. `company_parallel_processor.py` spawns multiple such flows, each with dynamically generated configurations (J1, J2) to ensure isolation. `brave_search.py` and `company_processor.py` use a simpler path via `startpage_mcp.json` directly to E.
+The diagram above illustrates the system architecture.
+- **Core Logic**: Python scripts (`brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) orchestrate the process, utilizing Brave Search API, Wikidata API, OpenAI LLM, and environment configurations from `.env`.
+- **MCP Interaction**: An `MCPClient` within the Python scripts communicates with a `Playwright MCP Server`.
+- **Sequential Processing (`brave_search.py`, `company_processor.py`)**: The `MCPClient` is configured using `startpage_mcp.json`, which directly instructs how to launch the Playwright MCP server.
+- **Parallel Processing (`company_parallel_processor.py`)**:
+    - It uses `parallel_mcp_launcher.json` as a template.
+    - For each worker process, it dynamically creates:
+        1.  `runtime-playwright-config.json`: Specifies a unique `userDataDir` for browser isolation and other Playwright settings (e.g., headless mode).
+        2.  `runtime-mcp-launcher.json`: A copy of the template, but its `--config` argument is updated to point to the worker's specific `runtime-playwright-config.json`.
+    - The `MCPClient` in each worker then uses its unique `runtime-mcp-launcher.json` to connect to an isolated Playwright MCP server instance.
+- **Browser Automation**: The Playwright MCP server controls browser instances for website interaction and data extraction.
+- **Output**: The process results in a JSON output containing company information.
 
 ### Technology Stack
 
@@ -152,7 +188,7 @@ The project uses different MCP launcher configurations:
       }
     }
     ```
-    The `<path_to_runtime_playwright_config.json>` is dynamically replaced by the actual path to `runtime-playwright-config.json` by `company_parallel_processor.py`.
+    The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `company_parallel_processor.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
 
 3.  **Dynamic Configuration for Parallel Processing (`company_parallel_processor.py`):**
     `company_parallel_processor.py` creates two configuration files per worker in a unique temporary directory:
@@ -260,6 +296,10 @@ BraveWebCrawler/
 ├── requirements.txt         # Python package dependencies
 ├── README.md                # User-facing documentation
 ├── DOCUMENTATION.md         # Detailed technical documentation (this file)
+├── BraveWebCrawler/         # Main package directory (if applicable, for imports)
+├── input/                   # Directory for input files (e.g., input.csv)
+│   └── input.csv
+├── venv312/                 # Python virtual environment
 └── ... (other generated files like __pycache__, .egg-info)
 ```
 
@@ -293,12 +333,12 @@ Template used by `company_parallel_processor.py`.
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"]
+      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "<path_to_runtime_playwright_config.json>"]
     }
   }
 }
 ```
-The `--config <dynamic_path_to_runtime_config>` part is dynamically replaced with a path to a per-process `runtime-playwright-config.json` by `company_parallel_processor.py`.
+The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `company_parallel_processor.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
 
 #### `.env`
 ```env
