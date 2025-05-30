@@ -15,20 +15,20 @@ graph TD
         B[Brave Search API]
         C[Wikidata API]
         G[OpenAI LLM]
-        H[Environment Config (.env)]
+        H[Environment Config .env]
     end
 
     subgraph "MCP Client & Server Interaction"
-        D[MCP Client (in Python scripts)]
-        E[Playwright MCP Server (npx @playwright/mcp)]
-        F[Browser Automation (Playwright)]
+        D[MCP Client in Python scripts]
+        E[Playwright MCP Server npx @playwright/mcp]
+        F[Browser Automation Playwright]
     end
 
     subgraph "MCP Configuration"
-        J_seq[startpage_mcp.json (Sequential Processing)]
-        J_par_template[parallel_mcp_launcher.json (Parallel Processing Template)]
-        J1_runtime_launcher[Dynamically generated runtime-mcp-launcher.json (Parallel Only)]
-        J2_runtime_playwright_config[Dynamically generated runtime-playwright-config.json (Parallel Only, specifies unique userDataDir)]
+        J_seq[startpage_mcp.json Sequential Processing]
+        J_par_template[parallel_mcp_launcher.json Parallel Processing Template]
+        J1_runtime_launcher[Dynamically generated runtime-mcp-launcher.json Parallel Only]
+        J2_runtime_playwright_config[Dynamically generated runtime-playwright-config.json Parallel Only specifies unique userDataDir]
     end
 
     A --> B
@@ -52,6 +52,7 @@ graph TD
     C --> K
     K --> F
     G --> M[JSON Output]
+
 ```
 
 The diagram above illustrates the system architecture.
