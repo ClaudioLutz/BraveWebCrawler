@@ -1,8 +1,0 @@
-{
-  "browser": {
-    "userDataDir": "${MCP_PLAYWRIGHT_USER_DATA_DIR}",
-    "launchOptions": {
-      "headless": false
-    }
-  }
-}
