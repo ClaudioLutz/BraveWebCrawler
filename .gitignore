@@ -4,3 +4,4 @@ venv312/
 input.csv
 output.csv
 pw_test.py
+${MCP_PLAYWRIGHT_USER_DATA_DIR}/
