@@ -9,49 +9,28 @@ This document provides detailed technical information about the Brave Search Com
 ### System Components
 
 ```mermaid
-graph TD
-    subgraph "Core Logic & APIs"
-        A[Python Scripts: brave_search.py, company_processor.py, company_parallel_processor.py]
-        B[Brave Search API]
-        C[Wikidata API]
-        G[OpenAI LLM]
-        H[Environment Config .env]
-    end
+flowchart TD
+  A[Start script] --> B[Find latest input CSV]
+  B --> C[Read & validate company list]
+  C --> D{Any companies to process?}
+  D -- No --> E[Write empty output CSV & exit]
+  D -- Yes --> F[Launch parallel workers]
+  F --> G[Process each company]
+  G --> H[Collect all results]
+  H --> I[Write output CSV]
+  I --> J[End]
 
-    subgraph "MCP Client & Server Interaction"
-        D[MCP Client in Python scripts]
-        E[Playwright MCP Server npx @playwright/mcp]
-        F[Browser Automation Playwright]
-    end
+  subgraph CompanyTask["Per-company task"]
+    direction TB
+    K1[Locate company website] 
+    K2[Set up temporary browser profile]
+    K3[Run agent to scrape details]
+    K4[Clean up temp files]
+    K1 --> K2 --> K3 --> K4
+  end
 
-    subgraph "MCP Configuration"
-        J_seq[sequential_mcp_config.json Sequential Processing]
-        J_par_template[parallel_mcp_launcher.json Parallel Processing Template]
-        J1_runtime_launcher[Dynamically generated runtime-mcp-launcher.json Parallel Only]
-        J2_runtime_playwright_config[Dynamically generated runtime-playwright-config.json Parallel Only specifies unique userDataDir]
-    end
-
-    A --> B
-    A --> C
-    A --> G
-    A --> H
-    A --> D
-
-    D -- Sequential --> J_seq
-    J_seq --> E
-
-    D -- Parallel --> J_par_template
-    J_par_template -- Used to create --> J1_runtime_launcher
-    J1_runtime_launcher -- References --> J2_runtime_playwright_config
-    J1_runtime_launcher --> E
-    J2_runtime_playwright_config -- Configures --> E
-
-    E --> F
-    F --> L[Company Website Interaction]
-    B --> K[Official Website URL]
-    C --> K
-    K --> F
-    G --> M[JSON Output]
+  F --> CompanyTask
+  CompanyTask --> H
 
 ```
 
