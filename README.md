@@ -117,7 +117,7 @@ The script returns a JSON object with the following company information:
 
 ## Configuration Files
 
-### startpage_mcp.json
+### sequential_mcp_config.json
 Configures the MCP server connection for single-threaded scripts:
 ```json
 {
@@ -156,7 +156,7 @@ The crawler relies on Playwright’s MCP server over stdio. Due to a temporary r
 
 ### 1. Pin the MCP version
 
-In your `startpage_mcp.json`, change the MCP server entry to:
+In your `sequential_mcp_config.json`, change the MCP server entry to:
 
 ```jsonc
 {
@@ -315,7 +315,7 @@ BraveWebCrawler/
 ├── company_processor.py     # Script for sequential batch processing
 ├── company_parallel_processor.py # Script for parallel batch processing
 ├── search_common.py         # Common URL discovery utilities
-├── startpage_mcp.json       # MCP config for single-threaded scripts
+├── sequential_mcp_config.json       # MCP config for single-threaded scripts
 ├── parallel_mcp_launcher.json # Template MCP config for parallel script
 ├── pyproject.toml           # Project metadata and package setup
 ├── requirements.txt         # Python package dependencies

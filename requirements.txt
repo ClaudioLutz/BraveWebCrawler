@@ -1,12 +1,12 @@
 # Core MCP and AI dependencies
-mcp-use
-langchain-openai
+mcp-use==1.3.0
+langchain-openai==0.3.18
 
 # Environment and configuration
-python-dotenv
+python-dotenv==1.1.0
 
 # HTTP client for API requests
-httpx
+httpx==0.28.1
 
 # Optional: Google AI integration (commented in code)
 # langchain-google-genai

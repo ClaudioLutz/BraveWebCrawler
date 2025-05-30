@@ -116,7 +116,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
     result_data["official_website"] = root_url_for_prompt # Store the found URL or "null"
 
     # --- MCP Agent part ---
-    mcp_config_path = os.path.join(os.path.dirname(__file__), "startpage_mcp.json")
+    mcp_config_path = os.path.join(os.path.dirname(__file__), "sequential_mcp_config.json")
     if not os.path.exists(mcp_config_path):
         print(f"Error: MCP config file not found at {mcp_config_path} for '{company_name}'", file=sys.stderr)
         result_data[EXPECTED_JSON_KEYS[1]] = "MCP_CONFIG_MISSING" # Indicate error in a field

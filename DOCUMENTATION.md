@@ -25,7 +25,7 @@ graph TD
     end
 
     subgraph "MCP Configuration"
-        J_seq[startpage_mcp.json Sequential Processing]
+        J_seq[sequential_mcp_config.json Sequential Processing]
         J_par_template[parallel_mcp_launcher.json Parallel Processing Template]
         J1_runtime_launcher[Dynamically generated runtime-mcp-launcher.json Parallel Only]
         J2_runtime_playwright_config[Dynamically generated runtime-playwright-config.json Parallel Only specifies unique userDataDir]
@@ -58,7 +58,7 @@ graph TD
 The diagram above illustrates the system architecture.
 - **Core Logic**: Python scripts (`brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) orchestrate the process, utilizing Brave Search API, Wikidata API, OpenAI LLM, and environment configurations from `.env`.
 - **MCP Interaction**: An `MCPClient` within the Python scripts communicates with a `Playwright MCP Server`.
-- **Sequential Processing (`brave_search.py`, `company_processor.py`)**: The `MCPClient` is configured using `startpage_mcp.json`, which directly instructs how to launch the Playwright MCP server.
+- **Sequential Processing (`brave_search.py`, `company_processor.py`)**: The `MCPClient` is configured using `sequential_mcp_config.json`, which directly instructs how to launch the Playwright MCP server.
 - **Parallel Processing (`company_parallel_processor.py`)**:
     - It uses `parallel_mcp_launcher.json` as a template.
     - For each worker process, it dynamically creates:
@@ -103,7 +103,7 @@ For single-threaded scripts like `brave_search.py` or `company_processor.py`:
 ```python
 # Create MCPClient from config file
 client = MCPClient.from_config_file(
-    os.path.join(os.path.dirname(__file__), "startpage_mcp.json")
+    os.path.join(os.path.dirname(__file__), "sequential_mcp_config.json")
 )
 ```
 For `company_parallel_processor.py`, the client configuration is dynamic (see "MCP Server Configuration" below).
@@ -127,7 +127,7 @@ agent = MCPAgent(llm=llm, client=client, max_steps=30)
 The system provides two scripts for processing multiple companies from a CSV file:
 
 - **Sequential Processing (`company_processor.py`)**:
-  Processes companies one after another. Uses `startpage_mcp.json`.
+  Processes companies one after another. Uses `sequential_mcp_config.json`.
   ```bash
   python company_processor.py input.csv output.csv
   ```
@@ -163,7 +163,7 @@ MCP enables AI models to securely connect to external tools. Here, it allows Pyt
 
 The project uses different MCP launcher configurations:
 
-1.  **`startpage_mcp.json` (for single-threaded scripts):**
+1.  **`sequential_mcp_config.json` (for single-threaded scripts):**
     Used by `brave_search.py` and `company_processor.py`.
     ```json
     {
@@ -221,9 +221,9 @@ The agent uses Playwright’s MCP server. Pinning to `@playwright/mcp@0.0.26` is
 
 ### 1. Pin MCP Server Version
 
-In your MCP launcher JSON files (e.g., `startpage_mcp.json`, `parallel_mcp_launcher.json`), ensure you explicitly request v0.0.26:
+In your MCP launcher JSON files (e.g., `sequential_mcp_config.json`, `parallel_mcp_launcher.json`), ensure you explicitly request v0.0.26:
 ```jsonc
-// Example for startpage_mcp.json
+// Example for sequential_mcp_config.json
 {
   "mcpServers": {
     "playwright": {
@@ -260,7 +260,7 @@ python -m playwright install
 from mcp_use import MCPClient, MCPAgent
 # ...
 # For single-threaded:
-# client = MCPClient.from_config_file("startpage_mcp.json") 
+# client = MCPClient.from_config_file("sequential_mcp_config.json") 
 # For parallel (path is dynamically generated per worker):
 # client = MCPClient.from_config_file(str(dynamic_mcp_launcher_path.resolve()))
 # ...
@@ -291,7 +291,7 @@ BraveWebCrawler/
 ├── company_processor.py     # Script for sequential batch processing
 ├── company_parallel_processor.py # Script for parallel batch processing
 ├── search_common.py         # Common URL discovery utilities
-├── startpage_mcp.json       # MCP config for single-threaded scripts
+├── sequential_mcp_config.json       # MCP config for single-threaded scripts
 ├── parallel_mcp_launcher.json # Template MCP config for parallel script
 ├── pyproject.toml           # Project metadata
 ├── requirements.txt         # Python package dependencies
@@ -314,7 +314,7 @@ async def main(company_name: str) -> str
 
 ### Configuration Files
 
-#### `startpage_mcp.json`
+#### `sequential_mcp_config.json`
 Used by `brave_search.py` and `company_processor.py`.
 ```json
 {

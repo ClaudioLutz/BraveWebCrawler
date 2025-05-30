@@ -117,7 +117,7 @@ async def main(company_name):
         print(f"\n==> Could not find URL for '{company_name}' using available methods.", file=sys.stderr)
 
     # --- MCP Agent part ---
-    mcp_config_path = os.path.join(os.path.dirname(__file__), "startpage_mcp.json")
+    mcp_config_path = os.path.join(os.path.dirname(__file__), "sequential_mcp_config.json")
     if not os.path.exists(mcp_config_path):
         print(f"Error: MCP config file not found at {mcp_config_path}", file=sys.stderr)
         sys.exit(1)
