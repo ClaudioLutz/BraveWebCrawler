@@ -34,8 +34,7 @@ from search_common import (
 
 # Expected keys from the agent's JSON output, used for CSV header and data extraction
 EXPECTED_JSON_KEYS = [
-    "official_website", "ceo", "founder", "owner", "employees", "founded",
-    "better_then_the_rest", "Hauptsitz", "Firmenidentifikationsnummer",
+    "official_website", "founded", "Hauptsitz", "Firmenidentifikationsnummer",
     "HauptTelefonnummer", "HauptEmailAdresse", "Geschäftsbericht"
 ]
 
@@ -126,13 +125,13 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
             print(f"[{os.getpid()}] Created temp profile directory: {tmp_profile_dir} for {company_name}")
         except Exception as e_mkdir:
             print(f"[{os.getpid()}] Error creating temp profile directory {tmp_profile_dir}: {e_mkdir}", file=sys.stderr)
-            result_data["ceo"] = "TEMP_DIR_CREATION_ERROR"
+            result_data[EXPECTED_JSON_KEYS[1]] = "TEMP_DIR_CREATION_ERROR"
             # This error is critical; cleanup will be attempted in finally, then return.
             raise  # Re-raise to be caught by the outer try-except
 
         if not os.getenv("OPENAI_API_KEY"): # Agent critically needs this
             print(f"Error: OPENAI_API_KEY is not available. MCPAgent cannot be initialized for '{company_name}'.", file=sys.stderr)
-            result_data["ceo"] = "AGENT_OPENAI_KEY_MISSING"
+            result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_OPENAI_KEY_MISSING"
             raise Exception("AGENT_OPENAI_KEY_MISSING")
 
         agent_llm = None
@@ -143,12 +142,12 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
             print(f"[{os.getpid()}] LLM for MCPAgent initialized for '{company_name}'.")
         except Exception as e:
             print(f"[{os.getpid()}] Error initializing LLM for MCPAgent for '{company_name}': {e}. Agent cannot run.", file=sys.stderr)
-            result_data["ceo"] = "AGENT_LLM_INIT_FAILURE"
+            result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_LLM_INIT_FAILURE"
             raise # Re-raise
         
         if agent_llm is None: # Should not happen if above try succeeded, but as a safeguard
             print(f"[{os.getpid()}] Agent LLM is None after initialization attempt for '{company_name}'. Cannot proceed.", file=sys.stderr)
-            result_data["ceo"] = "AGENT_LLM_IS_NONE_POST_INIT"
+            result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_LLM_IS_NONE_POST_INIT"
             raise Exception("AGENT_LLM_IS_NONE_POST_INIT")
 
         # --- Dynamic MCP Configuration ---
@@ -168,7 +167,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
         base_mcp_launcher_path = Path(__file__).parent / "parallel_mcp_launcher.json"
         if not base_mcp_launcher_path.exists():
             print(f"[{os.getpid()}] Error: Base MCP launcher template not found at {base_mcp_launcher_path} for '{company_name}'", file=sys.stderr)
-            result_data["ceo"] = "BASE_MCP_LAUNCHER_MISSING"
+            result_data[EXPECTED_JSON_KEYS[1]] = "BASE_MCP_LAUNCHER_MISSING"
             raise Exception("Base MCP launcher template not found")
 
         with open(base_mcp_launcher_path, 'r') as f:
@@ -187,11 +186,11 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
                     raise ValueError("MCP Launcher template '--config' argument is last, no value to replace.")
             except ValueError as e_template_val: # Handles '--config' not found or index issue
                 print(f"[{os.getpid()}] Error processing '--config' in {base_mcp_launcher_path} for '{company_name}': {e_template_val}", file=sys.stderr)
-                result_data["ceo"] = "MCP_LAUNCHER_TEMPLATE_CONFIG_ARG_ERROR"
+                result_data[EXPECTED_JSON_KEYS[1]] = "MCP_LAUNCHER_TEMPLATE_CONFIG_ARG_ERROR"
                 raise
         else:
             print(f"[{os.getpid()}] Error: MCP Launcher template {base_mcp_launcher_path} has unexpected structure for '{company_name}'", file=sys.stderr)
-            result_data["ceo"] = "MCP_LAUNCHER_TEMPLATE_STRUCTURE_ERROR"
+            result_data[EXPECTED_JSON_KEYS[1]] = "MCP_LAUNCHER_TEMPLATE_STRUCTURE_ERROR"
             raise Exception("MCP Launcher template has unexpected structure")
 
         dynamic_mcp_launcher_path = tmp_profile_dir / "runtime-mcp-launcher.json"
@@ -217,15 +216,10 @@ Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht
 Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
 
 Fakten zu sammeln:
-    • Aktueller CEO / Geschäftsführer
-    • Gründer (Komma-getrennt bei mehreren)
-    • Inhaber (Besitzer der Firma)
-    • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250", "ca. 500")
     • Gründungsjahr (JJJJ)
     • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
-    • Was macht diese Firma besser als ihre Konkurrenz (Stichworte, maximal 10 Wörter)
     • Addresse Hauptsitz (vollständige Adresse)
-    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX oder HRB XXXXX etc.)
+    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
     • Haupt-Telefonnummer (internationales Format wenn möglich)
     • Haupt-Emailadresse (allgemeine Kontakt-Email)
     • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
@@ -235,13 +229,8 @@ oder danach:
 
 {{
   "official_website": "{root_url_for_prompt}",
-  "ceo": "<name oder null>",
-  "founder": "<name(s) oder null>",
-  "owner": "<name(s) oder null>",
-  "employees": "<zahl/bereich oder null>",
-  "founded": "<jahr oder null>",
-  "better_then_the_rest": "<text oder null>",
-  "Hauptsitz": "<Strasse Nr, Postleitzahl, Ort>",
+  "founded": "<jahr JJJJ oder null>",
+  "Hauptsitz": "<vollständige Adresse oder null>",
   "Firmenidentifikationsnummer": "<ID oder null>",
   "HauptTelefonnummer": "<nummer oder null>",
   "HauptEmailAdresse": "<email oder null>",
@@ -264,15 +253,15 @@ oder danach:
 
         except json.JSONDecodeError:
             print(f"[{os.getpid()}] Error: Could not decode JSON from agent for '{company_name}'", file=sys.stderr)
-            result_data["ceo"] = "AGENT_JSON_DECODE_ERROR" # Indicate error
+            result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_JSON_DECODE_ERROR" # Indicate error
         except Exception as e_agent_run: # Catch other errors from agent.run()
             print(f"[{os.getpid()}] Error during agent execution for '{company_name}': {e_agent_run}", file=sys.stderr)
-            result_data["ceo"] = f"AGENT_EXECUTION_ERROR: {str(e_agent_run)[:50]}"
+            result_data[EXPECTED_JSON_KEYS[1]] = f"AGENT_EXECUTION_ERROR: {str(e_agent_run)[:50]}"
         
     except Exception as e_outer: # Catch-all for setup errors before agent run, or other unexpected issues
         print(f"[{os.getpid()}] Outer error processing company '{company_name}': {e_outer}", file=sys.stderr)
-        if result_data.get("ceo", "null") == "null": 
-            result_data["ceo"] = f"PROCESSING_ERROR: {str(e_outer)[:50]}"
+        if result_data.get(EXPECTED_JSON_KEYS[1], "null") == "null":
+            result_data[EXPECTED_JSON_KEYS[1]] = f"PROCESSING_ERROR: {str(e_outer)[:50]}"
     
     finally:
         # Cleanup the temporary profile directory

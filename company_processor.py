@@ -34,8 +34,7 @@ OPENAI_API_KEY_GLOBAL = None
 
 # Expected keys from the agent's JSON output, used for CSV header and data extraction
 EXPECTED_JSON_KEYS = [
-    "official_website", "ceo", "founder", "owner", "employees", "founded",
-    "better_then_the_rest", "Hauptsitz", "Firmenidentifikationsnummer",
+    "official_website", "founded", "Hauptsitz", "Firmenidentifikationsnummer",
     "HauptTelefonnummer", "HauptEmailAdresse", "Geschäftsbericht"
 ]
 
@@ -120,12 +119,12 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
     mcp_config_path = os.path.join(os.path.dirname(__file__), "startpage_mcp.json")
     if not os.path.exists(mcp_config_path):
         print(f"Error: MCP config file not found at {mcp_config_path} for '{company_name}'", file=sys.stderr)
-        result_data["ceo"] = "MCP_CONFIG_MISSING" # Indicate error in a field
+        result_data[EXPECTED_JSON_KEYS[1]] = "MCP_CONFIG_MISSING" # Indicate error in a field
         return result_data
     
     if not OPENAI_API_KEY_GLOBAL: # Agent critically needs this
         print(f"Error: OPENAI_API_KEY is not available. MCPAgent cannot be initialized for '{company_name}'.", file=sys.stderr)
-        result_data["ceo"] = "AGENT_OPENAI_KEY_MISSING"
+        result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_OPENAI_KEY_MISSING"
         return result_data
 
     agent_llm = None
@@ -134,7 +133,7 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
         print(f"LLM for MCPAgent initialized for '{company_name}'.")
     except Exception as e:
         print(f"Error initializing LLM for MCPAgent for '{company_name}': {e}. Agent cannot run.", file=sys.stderr)
-        result_data["ceo"] = "AGENT_LLM_INIT_ERROR"
+        result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_LLM_INIT_ERROR"
         return result_data
 
     client = MCPClient.from_config_file(mcp_config_path)
@@ -153,15 +152,10 @@ Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht
 Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
 
 Fakten zu sammeln:
-    • Aktueller CEO / Geschäftsführer
-    • Gründer (Komma-getrennt bei mehreren)
-    • Inhaber (Besitzer der Firma)
-    • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250", "ca. 500")
     • Gründungsjahr (JJJJ)
     • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
-    • Was macht diese Firma besser als ihre Konkurrenz (Stichworte, maximal 10 Wörter)
     • Addresse Hauptsitz (vollständige Adresse)
-    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX oder HRB XXXXX etc.)
+    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
     • Haupt-Telefonnummer (internationales Format wenn möglich)
     • Haupt-Emailadresse (allgemeine Kontakt-Email)
     • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
@@ -171,13 +165,8 @@ oder danach:
 
 {{
   "official_website": "{root_url_for_prompt}",
-  "ceo": "<name oder null>",
-  "founder": "<name(s) oder null>",
-  "owner": "<name(s) oder null>",
-  "employees": "<zahl/bereich oder null>",
-  "founded": "<jahr oder null>",
-  "better_then_the_rest": "<text oder null>",
-  "Hauptsitz": "<Strasse Nr, Postleitzahl, Ort>",
+  "founded": "<jahr JJJJ oder null>",
+  "Hauptsitz": "<vollständige Adresse oder null>",
   "Firmenidentifikationsnummer": "<ID oder null>",
   "HauptTelefonnummer": "<nummer oder null>",
   "HauptEmailAdresse": "<email oder null>",
@@ -200,10 +189,10 @@ oder danach:
 
     except json.JSONDecodeError:
         print(f"Error: Could not decode JSON from agent for '{company_name}'", file=sys.stderr)
-        result_data["ceo"] = "AGENT_JSON_DECODE_ERROR" # Indicate error
+        result_data[EXPECTED_JSON_KEYS[1]] = "AGENT_JSON_DECODE_ERROR" # Indicate error
     except Exception as e:
         print(f"Error during agent execution for '{company_name}': {e}", file=sys.stderr)
-        result_data["ceo"] = f"AGENT_EXECUTION_ERROR: {str(e)[:50]}"
+        result_data[EXPECTED_JSON_KEYS[1]] = f"AGENT_EXECUTION_ERROR: {str(e)[:50]}"
     return result_data
 
 
