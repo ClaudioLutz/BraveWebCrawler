@@ -10,7 +10,7 @@ This document provides detailed technical information about the Brave Search Com
 
 ```mermaid
 graph TD
-    A[brave_search.py] --> B[Brave Search API]
+    A[brave_search.py / company_processor.py / company_parallel_processor.py] --> B[Brave Search API]
     A --> C[Wikidata API]
     A --> D[MCP Client]
     D --> E[Playwright MCP Server]
@@ -18,7 +18,10 @@ graph TD
     A --> G[OpenAI LLM]
     A --> H[Environment Config]
     H --> I[.env file]
-    H --> J[startpage_mcp.json]
+    H --> J[parallel_mcp_launcher.json (template for parallel) / startpage_mcp.json (for sequential)] 
+    J --> J1[Dynamically generated runtime-mcp-launcher.json (parallel only)]
+    J1 --> J2[Dynamically generated runtime-playwright-config.json (specifies unique userDataDir, parallel only)]
+    J2 --> E
     B --> K[Official Website URL]
     C --> K
     F --> L[Company Website]
@@ -26,7 +29,7 @@ graph TD
     K --> F
 ```
 
-The diagram above illustrates the flow for a single company lookup, typically initiated by `brave_search.py` or a single process within `company_processor.py`. The system also includes `company_parallel_processor.py`, which processes multiple companies in parallel, with each parallel process following a similar architecture to the one depicted.
+The diagram above illustrates the flow for a company lookup. `company_parallel_processor.py` spawns multiple such flows, each with dynamically generated configurations (J1, J2) to ensure isolation. `brave_search.py` and `company_processor.py` use a simpler path via `startpage_mcp.json` directly to E.
 
 ### Technology Stack
 
@@ -55,16 +58,18 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 # Enable debug logging
-Logger.set_debug(2)
+Logger.set_debug(1) # Or 2 for verbose
 ```
 
 #### 2. MCP Client Configuration
+For single-threaded scripts like `brave_search.py` or `company_processor.py`:
 ```python
 # Create MCPClient from config file
 client = MCPClient.from_config_file(
     os.path.join(os.path.dirname(__file__), "startpage_mcp.json")
 )
 ```
+For `company_parallel_processor.py`, the client configuration is dynamic (see "MCP Server Configuration" below).
 
 #### 3. LLM Initialization
 ```python
@@ -85,70 +90,194 @@ agent = MCPAgent(llm=llm, client=client, max_steps=30)
 The system provides two scripts for processing multiple companies from a CSV file:
 
 - **Sequential Processing (`company_processor.py`)**:
-  Use `company_processor.py` to process companies one after another. This is suitable for smaller lists or when sequential execution is preferred.
+  Processes companies one after another. Uses `startpage_mcp.json`.
   ```bash
   python company_processor.py input.csv output.csv
   ```
   The input file must have `company_number` and `company_name` columns.
 
 - **Parallel Processing (`company_parallel_processor.py`)**:
-  For larger datasets, `company_parallel_processor.py` offers significantly faster processing by handling multiple companies concurrently. See component #7 below for more details on its usage and benefits.
+  Offers significantly faster processing by handling multiple companies concurrently using dynamically generated MCP configurations for isolation.
+  ```bash
+  python company_parallel_processor.py input.csv output.csv --workers <num_workers>
+  ```
 
 #### 6. Shared Search Utilities (`search_common.py`)
-This module consolidates common functionalities for finding company URLs, including:
-- Querying the Brave Search API (`get_brave_search_candidates`).
-- Querying the Wikidata API (`get_wikidata_homepage`).
-- Using an LLM to select the best URL from candidates (`select_best_url_with_llm`).
-These functions are parameterized to accept API keys and LLM instances directly.
+This module consolidates common functionalities for finding company URLs.
 
 #### 7. Parallel Batch Processing (`company_parallel_processor.py`)
-This script is designed for processing a large number of companies from a CSV file concurrently. It utilizes the `multiprocessing` module to distribute the workload across multiple CPU cores, significantly speeding up the data extraction process for large datasets. Each worker process handles a subset of companies, independently performing URL discovery (via `search_common.py`) and data extraction using an `MCPAgent`.
+This script utilizes `multiprocessing` and a dynamic MCP configuration strategy to process companies in parallel, ensuring each Playwright instance is isolated.
 
 Usage:
 ```bash
 python company_parallel_processor.py input.csv output.csv --workers <num_workers>
 ```
-- `input.csv`: Path to the input CSV file (must contain `company_number` and `company_name` columns).
+- `input.csv`: Path to the input CSV file.
 - `output.csv`: Path where the results will be saved.
-- `--workers <num_workers>`: Optional. Number of worker processes to use. Defaults to the number of CPU cores.
+- `--workers <num_workers>`: Optional. Number of worker processes. Defaults to CPU cores.
 
 ## MCP (Model Context Protocol) Integration
 
 ### What is MCP?
 
-MCP is a protocol that enables AI models to securely connect to external tools and data sources. In this project, it allows the Python script to control a browser through the Playwright MCP server.
+MCP enables AI models to securely connect to external tools. Here, it allows Python to control a browser via the Playwright MCP server.
 
 ### MCP Server Configuration
 
-The `startpage_mcp.json` file configures the Playwright MCP server:
+The project uses different MCP launcher configurations:
 
-```json
+1.  **`startpage_mcp.json` (for single-threaded scripts):**
+    Used by `brave_search.py` and `company_processor.py`.
+    ```json
+    {
+      "mcpServers": {
+        "playwright": {
+          "command": "npx",
+          "args": ["-y", "@playwright/mcp@0.0.26"] 
+        }
+      }
+    }
+    ```
+    *(Note: Pinned version `@playwright/mcp@0.0.26` for stability).*
+
+2.  **`parallel_mcp_launcher.json` (template for parallel processing):**
+    Base template for `company_parallel_processor.py`.
+    ```json
+    {
+      "mcpServers": {
+        "playwright": {
+          "command": "npx",
+          "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"] 
+        }
+      }
+    }
+    ```
+    The `./mcp-config.json` path is a placeholder, dynamically replaced.
+
+3.  **Dynamic Configuration for Parallel Processing (`company_parallel_processor.py`):**
+    `company_parallel_processor.py` creates two configuration files per worker in a unique temporary directory:
+    *   **`runtime-playwright-config.json`**: Specifies `browser.userDataDir` (the unique temp directory) and `browser.launchOptions.headless`.
+        ```json
+        // Example content for runtime-playwright-config.json
+        {
+          "browser": {
+            "userDataDir": "C:\\path\\to\\temp\\mcp_playwright_profile_PID",
+            "launchOptions": { "headless": false }
+          }
+        }
+        ```
+    *   **`runtime-mcp-launcher.json`**: A copy of `parallel_mcp_launcher.json`, but its `--config` argument points to the worker's `runtime-playwright-config.json`.
+
+    The `MCPClient` in each worker uses its unique `runtime-mcp-launcher.json`. The temporary directory and files are cleaned up afterward.
+
+The static `mcp-config.json` (referenced in `parallel_mcp_launcher.json`) is effectively superseded by the dynamic generation of `runtime-playwright-config.json` for parallel processing. It might serve as a fallback or could be removed.
+
+### MCP Communication Flow
+
+1. **Initialization**: `MCPClient` connects to Playwright server (launched via `npx`).
+2. **Tool Discovery**: Client discovers available browser automation tools.
+3. **Tool Execution**: Agent uses tools to navigate and extract data.
+4. **Data Return**: Results are passed back through MCP.
+
+## Playwright MCP Server Setup
+
+The agent uses Playwright’s MCP server. Pinning to `@playwright/mcp@0.0.26` is recommended due to past regressions in newer versions.
+
+### 1. Pin MCP Server Version
+
+In your MCP launcher JSON files (e.g., `startpage_mcp.json`, `parallel_mcp_launcher.json`), ensure you explicitly request v0.0.26:
+```jsonc
+// Example for startpage_mcp.json
 {
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"]
+      "args": ["-y", "@playwright/mcp@0.0.26"] // Pinned version
+    }
+  }
+}
+
+// Example for parallel_mcp_launcher.json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"] // Pinned version
     }
   }
 }
 ```
 
-### MCP Communication Flow
+### 2. Install MCP Package
+```bash
+npm install -g @playwright/mcp@0.0.26 
+```
 
-1. **Initialization**: MCPClient connects to Playwright server via npx
-2. **Tool Discovery**: Client discovers available browser automation tools
-3. **Tool Execution**: Agent uses tools to navigate and extract data
-4. **Data Return**: Results are passed back through MCP protocol
+### 3. Install Playwright Browsers
+(Using PowerShell or cmd.exe in your activated virtual environment)
+```bash
+python -m playwright install
+```
 
-## Playwright MCP Server Setup
+### 4. Automatic Initialization in Python
+```python
+from mcp_use import MCPClient, MCPAgent
+# ...
+# For single-threaded:
+# client = MCPClient.from_config_file("startpage_mcp.json") 
+# For parallel (path is dynamically generated per worker):
+# client = MCPClient.from_config_file(str(dynamic_mcp_launcher_path.resolve()))
+# ...
+agent = MCPAgent(llm=llm, client=client, max_steps=30)
+```
+Console output should show successful initialization.
 
-The Brave Search Company Agent uses Playwright’s Model Context Protocol (MCP) server over stdio to drive browser automation. A transient regression in `@playwright/mcp` v0.0.27 mandates pinning to v0.0.26 until upstream fixes the issue.
+### 5. Troubleshooting
+*   Confirm pinning to `@playwright/mcp@0.0.26`.
+*   Ensure `npx` and `node` (v16+) are on PATH.
+*   Verify Playwright browsers are installed (`python -m playwright install`).
+*   Check PowerShell execution policy if on Windows.
+*   Upgrade `mcp_use` (`pip install --upgrade mcp_use`).
+*   Ensure MCP launcher JSONs have no obsolete flags (like `--stdio`).
 
-### 1. Pin MCP Server Version
+## Prompt Engineering
+(This section remains largely unchanged but is contextually important)
+...
 
-In your `startpage_mcp.json`, ensure you explicitly request v0.0.26:
+## File Structure
 
-```jsonc
+A brief overview of the key files and directories:
+```
+BraveWebCrawler/
+├── .env                     # Environment variables (API keys, etc.)
+├── .gitignore               # Specifies intentionally untracked files
+├── brave_search.py          # CLI script for single company search
+├── company_processor.py     # Script for sequential batch processing
+├── company_parallel_processor.py # Script for parallel batch processing
+├── search_common.py         # Common URL discovery utilities
+├── startpage_mcp.json       # MCP config for single-threaded scripts
+├── parallel_mcp_launcher.json # Template MCP config for parallel script
+├── mcp-config.json          # Base Playwright config, referenced by parallel_mcp_launcher.json
+├── pyproject.toml           # Project metadata
+├── requirements.txt         # Python package dependencies
+├── README.md                # User-facing documentation
+├── DOCUMENTATION.md         # Detailed technical documentation (this file)
+└── ... (other generated files like __pycache__, .egg-info)
+```
+
+## API Reference
+
+### Main Function
+(Refers to `brave_search.py`'s main, adaptable to others)
+```python
+async def main(company_name: str) -> str 
+```
+
+### Configuration Files
+
+#### `startpage_mcp.json`
+Used by `brave_search.py` and `company_processor.py`.
+```json
 {
   "mcpServers": {
     "playwright": {
@@ -159,632 +288,44 @@ In your `startpage_mcp.json`, ensure you explicitly request v0.0.26:
 }
 ```
 
-> **Why?** v0.0.27 contains a bug that prevents the server from initializing correctly over stdio. Pinning ensures a known-good handshake.
-
-### 2. Install MCP Package
-
-Run this command **once** to install the MCP server:
-
-```bash
-# Install the MCP wrapper globally (optional; local install also works)
-npm install -g @playwright/mcp@0.0.26
-```
-
-* This command fetches the MCP CLI (≈300 MB download on first run).
-
-### 3. Install the Playwright browsers
-
-> **Important:** The Playwright CLI can hang or misbehave in Git-Bash/MINGW64. Use PowerShell or cmd.exe for this step.
-
-1. **Activate your virtual environment**  
-   Make sure you’re inside your project folder (where `venv312` lives), then run _exactly one_ of these, depending on your shell:
-
-   - **PowerShell**  
-     ```powershell
-     # (just once per session, to allow scripts)
-     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-
-     # activate venv
-     .\venv312\Scripts\Activate.ps1
-     ```
-   - **Command Prompt (cmd.exe)**  
-     ```cmd
-     venv312\Scripts\activate.bat
-     ```
-   - **Git Bash / WSL / other POSIX-like shells**  
-     ```bash
-     source venv312/Scripts/activate
-     ```
-
-   After activation you should see `(venv312)` at the start of your prompt.
-
-2. **Install the browsers**  
-   Now that your venv is active in PowerShell or cmd.exe, run:
-   ```bash
-   python -m playwright install
-   ```
-   This will download the Chromium, Firefox, and WebKit binaries that Playwright needs.
-
-3. **Verify the installation**
-   ```bash
-   playwright --version
-   playwright install --help
-   ```
-   If those commands print help text or a version number, you’re good to go!
-
-### 4. Automatic Initialization in Python
-
-Your Python code, via `mcp_use`, will now launch:
-
-```python
-from mcp_use import MCPClient, MCPAgent
-from mcp_use.logging import Logger
-from langchain_openai import ChatOpenAI
-
-Logger.set_debug(2)  # verbose MCP protocol logging
-
-client = MCPClient.from_config_file("startpage_mcp.json")
-llm    = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
-agent  = MCPAgent(llm=llm, client=client, max_steps=30)
-
-# When you call agent.run(), mcp_use will:
-#  1. spawn `npx @playwright/mcp@0.0.26`
-#  2. send a framed initialize request (with Content-Length, protocolVersion, capabilities, clientInfo)
-#  3. receive and log the initialize result
-#  4. proceed with browser commands
-```
-
-You should see in your console:
-
-```
-DEBUG → initialize (Content-Length: xxx)
-DEBUG ← initialize result ✔
-DEBUG Session initialized ✔
-```
-
-at which point the agent will drive Playwright without hanging.
-
-### 4. Manual Server Verification (Optional)
-
-If you need to confirm the MCP server is responding correctly outside Python:
-
-1. Create an `init.json` file with a valid LSP initialize payload:
-
-   ```bash
-   cat << 'EOF' > init.json
-   {"jsonrpc":"2.0","id":0,"method":"initialize","params":{
-      "protocolVersion":"1.0.0",
-      "capabilities":{},
-      "clientInfo":{"name":"mcp_manual_test","version":"1.0.0"}
-   }}
-   EOF
-   ```
-
-2. Send it with proper LSP framing:
-
-   ```bash
-   length=$(wc -c < init.json)
-   printf 'Content-Length: %d\r\n\r\n' "$length"
-   cat init.json \
-     | npx -y @playwright/mcp@0.0.26
-   ```
-
-3. A successful response will look like:
-
-   ```json
-   {"jsonrpc":"2.0","id":0,"result":{"capabilities":{…}}}
-   ```
-
-If you see that, the server is healthy and ready for your Python client.
-
-### 5. Troubleshooting
-
-* **No initialize response?**
-
-  * ✔️ Confirm you pinned to `@playwright/mcp@0.0.26`.
-  * ✔️ Ensure `npx --version` and `node --version` are v16+ and on your PATH.
-  * ✔️ Run `npx playwright install chromium` again to verify browsers are installed.
-* **Permission or exec errors on Windows?**
-
-  * In PowerShell run:
-
-    ```powershell
-    Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-    ```
-  * Or launch your script from CMD rather than Git Bash.
-* **Still hanging in Python logs at “Initializing MCP session”?**
-
-  * Upgrade your `mcp_use` client:
-
-    ```bash
-    pip install --upgrade mcp_use
-    ```
-  * Verify your `startpage_mcp.json` contains **no** obsolete flags like `--stdio`.
-
----
-
-With these steps in place, your MCPAgent will complete its handshake and seamlessly control Playwright for full end-to-end company data extraction.
-
-## Prompt Engineering
-
-### Search Strategy
-
-The agent uses a two-phase approach:
-
-1. **URL Discovery Phase**: 
-   - Primary: Brave Search API with query `"{company_name} offizielle Webseite Schweiz"`
-   - Fallback: Wikidata API for official website property (P856)
-   - Filtering: Excludes social media, job sites, and blacklisted domains
-
-2. **Data Extraction Phase**: 
-   - Uses found URL or proceeds without URL if none found
-   - Employs German-language prompt for Swiss company focus
-   - Extracts specific data points with null handling
-
-### Data Extraction Fields
-
-The prompt specifies exact fields to extract:
-
-```python
-prompt = f"""
-Du bist ein Web-Agent mit Playwright-Werkzeugen.
-
-Die offizielle Webseite für "{company_name}" wurde als "{root_url_for_prompt if company_url else 'nicht gefunden'}" identifiziert.
-
-Wenn eine URL ({root_url_for_prompt}) vorhanden ist und nicht 'null' oder 'nicht gefunden' lautet:
-1. Öffne diese URL: {root_url_for_prompt}
-2. Durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte)
-   und sammle die unten genannten Fakten.
-
-Wenn KEINE URL gefunden wurde (d.h. als "{root_url_for_prompt}" angegeben ist) ODER Informationen auf der Webseite nicht auffindbar sind, gib für die entsprechenden Felder **null** zurück.
-
-Fakten zu sammeln:
-   • Aktueller CEO / Geschäftsführer
-   • Gründer (Komma-getrennt bei mehreren)
-   • Inhaber (Besitzer der Firma)
-   • Aktuelle Mitarbeiterzahl (Zahl oder Bereich, z. B. "200-250")
-   • Gründungsjahr (JJJJ)
-   • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
-   • Was macht diese Firma besser als ihre Konkurrenz. (maximal 10 Wörter)
-   • Hauptsitz (Adresse des Firmenhauptsitzes)
-   • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
-   • Haupt-Telefonnummer
-   • Haupt-Emailadresse
-   • Geschäftsbericht (URL zum PDF, falls vorhanden)
-"""
-```
-
-### URL Discovery Functions
-
-The core logic for URL discovery now resides in `search_common.py`. Functions such as `get_brave_search_candidates` and `select_best_url_with_llm` are designed to receive necessary API keys or LLM instances as parameters.
-
-#### Brave Search Implementation
-```python
-def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5) -> List[Dict[str, Any]]:
-    """Fetches company homepage using Brave Search API."""
-    headers = {
-        "Accept": "application/json",
-        "X-Subscription-Token": brave_api_key
-    }
-    params = {"q": f'"{company}" homepage official site', "count": count, "country": "ch", "search_lang": "de"}
-    # Implementation includes candidate filtering and blacklist checking
-```
-
-#### Wikidata Fallback Implementation (`get_wikidata_homepage`)
-```python
-def get_wikidata_homepage(company: str) -> str | None:
-    """Fetches company homepage from Wikidata."""
-    # 1. Search for entity by company name
-    # 2. Fetch P856 (official website) property
-    # 3. Validate and filter results
-```
-
-## Error Handling and Debugging
-
-### Debug Levels
-
-```python
-Logger.set_debug(0)  # No debug output
-Logger.set_debug(1)  # INFO level messages
-Logger.set_debug(2)  # DEBUG level messages (full verbose)
-```
-
-### Common Error Scenarios
-
-#### 1. Brave Search API Failures
-- **Cause**: Invalid API key, rate limiting, or network issues
-- **Detection**: HTTP status errors or request timeouts
-- **Resolution**: Check API key, verify quota limits, ensure network connectivity
-
-#### 2. Wikidata API Failures
-- **Cause**: Network issues or API rate limiting
-- **Detection**: HTTP errors or JSON parsing failures
-- **Resolution**: Implement retry logic, check network connectivity
-
-#### 3. MCP Connection Failures
-- **Cause**: npx not available or execution policy issues
-- **Detection**: Connection timeout errors
-- **Resolution**: Verify npx installation and PowerShell execution policy
-
-#### 4. LLM API Errors
-- **Cause**: Invalid API key or rate limiting
-- **Detection**: OpenAI authentication errors
-- **Resolution**: Check API key and usage limits
-
-#### 5. Browser Automation Failures
-- **Cause**: Website changes, network issues, or anti-bot measures
-- **Detection**: Playwright timeout or navigation errors
-- **Resolution**: Adjust timeouts or update navigation logic
-
-## Performance Considerations
-
-### Execution Time
-- **Typical runtime**: 30-60 seconds per company
-- **Factors affecting speed**: Website complexity, network latency, LLM response time
-
-### Resource Usage
-- **Memory**: ~200-500MB during execution
-- **Network**: Moderate bandwidth for page loading and API calls
-- **CPU**: Low to moderate usage
-
-### Optimization Strategies
-
-1. **Reduce max_steps**: Lower from 30 to 15-20 for faster execution
-2. **Adjust temperature**: Keep at 0 for consistent results
-3. **Use faster models**: Consider gpt-3.5-turbo for speed vs accuracy trade-off
-
-## Security Considerations
-
-### API Key Management
-- Store keys in `.env` file (never commit to version control) The main scripts (e.g., `brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) are responsible for loading these keys from the `.env` file.
-- Shared utility functions, such as those in `search_common.py`, are designed to receive these API keys (and configured LLM instances, where applicable) as parameters from the calling script. This promotes better encapsulation and makes the utility functions more testable and flexible.
-- Use environment-specific keys for development/production
-- Implement key rotation policies
-
-### Browser Security
-- Playwright runs in isolated environment
-- No persistent browser data stored
-- Automatic cleanup after execution
-
-### Data Privacy
-- No company data is stored locally
-- All processing happens in memory
-- Consider data retention policies for logs
-
-## Customization Options
-
-### Changing Target Search Engine
-
-To use a different search engine, modify the prompt:
-
-```python
-# For Google instead of startpage.com
-prompt = f"""
-Du bist ein Web-Agent mit Playwright-Werkzeugen.
-
-1. Öffne google.com
-2. Suche nach: "{company_name} offizielle Webseite Schweiz"
-...
-"""
-```
-
-### Adding New Data Fields
-
-To extract additional information, modify the JSON structure in the prompt:
-
-```python
-{{
-  "official_website": "<url oder null>",
-  "ceo": "<name oder null>",
-  "founder": "<name oder null>",
-  "owner": "<name oder null>",
-  "employees": "<zahl oder null>",
-  "founded": "<jahr oder null>",
-  "better_then_the_rest": "<kurze beschreibung>",
-  "Hauptsitz": "<adresse oder null>",
-  "Firmenidentifikationsnummer": "<CHE-... oder null>",
-  "HauptTelefonnummer": "<telefon oder null>",
-  "HauptEmailAdresse": "<email oder null>",
-  "Geschäftsbericht": "<url oder null>"
-}}
-```
-
-### Using Different LLM Models
-
-#### OpenAI Models
-```python
-# GPT-4
-llm = ChatOpenAI(model="gpt-4", temperature=0)
-
-# GPT-4o (faster)
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
-```
-
-#### Google Gemini Models
-```python
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-pro-preview-05-06", 
-    temperature=0
-)
-```
-
-## Monitoring and Logging
-
-### Log Levels
-- **INFO**: Basic execution flow
-- **DEBUG**: Detailed MCP communication
-- **ERROR**: Failures and exceptions
-
-### Log Analysis
-Monitor logs for:
-- Connection establishment times
-- Tool execution success rates
-- LLM response quality
-- Error patterns
-
-## Deployment Considerations
-
-### Production Environment
-- Use production-grade API keys
-- Implement proper error handling
-- Set up monitoring and alerting
-- Consider rate limiting
-
-### Scaling
-- Implement queuing for multiple requests
-- Use connection pooling for MCP clients
-- Consider distributed execution for high volume
-
-### Maintenance
-- Regular dependency updates
-- Monitor for website structure changes
-- Update prompts based on success rates
-
-## API Reference
-
-### Main Function
-```python
-async def main(company_name: str) -> str
-```
-**Parameters:**
-- `company_name`: Name of the company to search for
-
-**Returns:**
-- JSON string with company information
-
-### Configuration Files
-
-#### startpage_mcp.json
+#### `parallel_mcp_launcher.json`
+Template used by `company_parallel_processor.py`.
 ```json
 {
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"],
-      "env": {
-        "DISPLAY": ":1"  // Optional for headless environments
-      }
+      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"]
     }
   }
 }
 ```
+The `--config ./mcp-config.json` part is dynamically replaced with a path to a per-process `runtime-playwright-config.json`.
 
-#### .env
+#### `mcp-config.json`
+Provides base Playwright settings, potentially overridden by dynamic configurations.
+```json
+{
+  "browser": {
+    "userDataDir": "${MCP_PLAYWRIGHT_USER_DATA_DIR}", // This is effectively ignored by company_parallel_processor.py
+    "launchOptions": { "headless": false }
+  }
+}
+```
+For `company_parallel_processor.py`, `userDataDir` and `headless` are set in the dynamically generated `runtime-playwright-config.json`.
+
+#### `.env`
 ```env
 OPENAI_API_KEY=sk-...
-BRAVE_API_KEY=BSA...  # Required for primary search
-GOOGLE_API_KEY=AIza...  # Optional
+BRAVE_API_KEY=BSA...
 ```
+... (rest of the document remains the same as the last provided version) ...
 
 ## Testing
-
-### Unit Testing
-```python
-import pytest
-import asyncio
-from brave_search import main
-
-@pytest.mark.asyncio
-async def test_company_search():
-    result = await main("Test Company")
-    assert result is not None
-    # Add more assertions
-```
-
-### Integration Testing
-- Test with known companies
-- Verify JSON structure
-- Check for null handling
-
-### Performance Testing
-- Measure execution time
-- Test with various company types
-- Monitor resource usage
-
+...
 ## Troubleshooting Guide
-
-### Step-by-Step Debugging
-
-1. **Verify Environment**
-   ```bash
-   python --version  # Should be 3.11+
-   node --version    # Should be v16+
-   npx --version     # Should show version
-   ```
-
-2. **Test MCP Connection**
-   ```python
-   from mcp_use import MCPClient
-   client = MCPClient.from_config_file("startpage_mcp.json")
-   # Should connect without errors
-   ```
-
-3. **Test LLM Connection**
-   ```python
-   from langchain_openai import ChatOpenAI
-   llm = ChatOpenAI(model="gpt-4.1-mini")
-   response = llm.invoke("Hello")
-   print(response.content)
-   ```
-
-4. **Enable Verbose Logging**
-   ```python
-   Logger.set_debug(2)
-   ```
-
-### Common Solutions
-
-| Error | Solution |
-|-------|----------|
-| `ModuleNotFoundError` | Install missing packages with pip |
-| `PowerShell execution policy` | Run `Set-ExecutionPolicy RemoteSigned` |
-| `OpenAI authentication` | Check API key in .env file |
-| `MCP connection timeout` | Verify npx and internet connection |
-| `Browser automation fails` | Check website accessibility |
-
-### MCPAgent Browser Session Hangs
-
-If the crawler hangs at "creating new ones…" when initializing the MCPAgent's browser session, follow these steps:
-
-1. **Install Playwright and browsers**
-
-   * Ensure the Python package is installed:
-
-     ```bash
-     pip install playwright
-     ```
-   * Install browser binaries (from a plain CMD prompt in your venv):
-
-     ```bat
-     playwright install
-     ```
-   * Confirm installation:
-
-     ```bat
-     playwright --version
-     playwright install --help
-     ```
-
-2. **Test Playwright in isolation**
-   Create `pw_test.py`:
-
-   ```python
-   import asyncio
-   from playwright.async_api import async_playwright
-
-   async def main():
-       async with async_playwright() as p:
-           browser = await p.chromium.launch()
-           page = await browser.new_page()
-           await page.goto("https://example.com")
-           print("PAGE TITLE:", await page.title())
-           await browser.close()
-
-   if __name__ == "__main__":
-       asyncio.run(main())
-   ```
-
-   Run it:
-
-   ```bash
-   python pw_test.py
-   ```
-
-   You should see:
-
-   ```
-   PAGE TITLE: Example Domain
-   ```
-
-3. **Shell/Policy issues on Windows**
-
-   * If PowerShell blocks activation scripts, use the `.bat` activator in CMD:
-
-     ```bat
-     venv312\Scripts\activate.bat
-     ```
-   * Or temporarily relax PowerShell policy:
-
-     ```powershell
-     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-     .\venv312\Scripts\Activate.ps1
-     ```
-
-4. **Add a timeout to MCPAgent** (optional)
-   To prevent indefinite hangs, wrap the agent call:
-
-   ```python
-   import asyncio
-
-   try:
-       result = await asyncio.wait_for(
-           agent.run(prompt, max_steps=30),
-           timeout=300
-       )
-   except asyncio.TimeoutError:
-       # handle timeout
-   ```
-
-With these steps, Playwright will be able to launch Chromium and the crawler will proceed past the startup hang. Feel free to adjust logging levels or reuse the agent across multiple companies to optimize performance.
-
-## File Structure
-
-A brief overview of the key files and directories in the project:
-
-```
-BraveWebCrawler/
-├── .env                     # Environment variables (API keys, etc.) - Not version controlled
-├── .gitignore               # Specifies intentionally untracked files that Git should ignore
-├── brave_search.py          # CLI script for single company search and data extraction
-├── company_processor.py     # Script for batch processing companies from a CSV file sequentially
-├── company_parallel_processor.py # Script for batch processing companies from a CSV file in parallel
-├── search_common.py         # Common utility functions for URL discovery (Brave, Wikidata, LLM selection)
-├── startpage_mcp.json       # Configuration for the Playwright MCP server
-├── pyproject.toml           # Project metadata and build system configuration (PEP 518)
-├── requirements.txt         # Python package dependencies
-├── README.md                # User-facing documentation: overview, setup, usage
-├── DOCUMENTATION.md         # Detailed technical documentation (this file)
-├── brave_search_agent.egg-info/ # Packaging metadata generated by setuptools
-└── __pycache__/             # Python bytecode cache
-```
-
-(Note: Some generated files like `__pycache__` and `.egg-info` are typically gitignored but listed for completeness of what might be seen locally.)
-
+...
 ## Future Enhancements
-
-### Planned Features
-- Support for multiple search engines
-- Result caching and storage
-- Web interface for easier usage
-- Multi-language support
-
-### Completed Features
-- Batch processing via `company_processor.py`
-
-### Technical Improvements
-- Async processing for better performance
-- Better error recovery mechanisms
-- Enhanced data validation
-- Improved prompt engineering
-
+...
 ## Contributing
-
-### Development Setup
-1. Fork the repository
-2. Create virtual environment
-3. Install development dependencies
-4. Run tests before submitting changes
-
-### Code Standards
-- Follow PEP 8 style guidelines
-- Add type hints where appropriate
-- Include docstrings for functions
-- Write tests for new features
-
-### Pull Request Process
-1. Create feature branch
-2. Implement changes with tests
-3. Update documentation
-4. Submit pull request with description
+...

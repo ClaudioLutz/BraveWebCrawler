@@ -91,6 +91,9 @@ For processing multiple companies at once, run:
 ```bash
 python company_processor.py input.csv output.csv
 ```
+```bash
+python company_parallel_processor.py input.csv output.csv
+```
 The input CSV must have the columns `company_number` and `company_name` with a header row.
 
 ### Expected Output
