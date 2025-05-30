@@ -147,12 +147,12 @@ The project uses different MCP launcher configurations:
       "mcpServers": {
         "playwright": {
           "command": "npx",
-          "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"] 
+          "args": ["-y", "@playwright/mcp@0.0.26", "--config", "<path_to_runtime_playwright_config.json>"]
         }
       }
     }
     ```
-    The `./mcp-config.json` path is a placeholder, dynamically replaced.
+    The `<path_to_runtime_playwright_config.json>` is dynamically replaced by the actual path to `runtime-playwright-config.json` by `company_parallel_processor.py`.
 
 3.  **Dynamic Configuration for Parallel Processing (`company_parallel_processor.py`):**
     `company_parallel_processor.py` creates two configuration files per worker in a unique temporary directory:
@@ -170,7 +170,6 @@ The project uses different MCP launcher configurations:
 
     The `MCPClient` in each worker uses its unique `runtime-mcp-launcher.json`. The temporary directory and files are cleaned up afterward.
 
-The static `mcp-config.json` (referenced in `parallel_mcp_launcher.json`) is effectively superseded by the dynamic generation of `runtime-playwright-config.json` for parallel processing. It might serve as a fallback or could be removed.
 
 ### MCP Communication Flow
 
@@ -202,7 +201,7 @@ In your MCP launcher JSON files (e.g., `startpage_mcp.json`, `parallel_mcp_launc
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "./mcp-config.json"] // Pinned version
+      "args": ["-y", "@playwright/mcp@0.0.26", "--config", "<dynamic_path_to_runtime_config>"] // Pinned version
     }
   }
 }
@@ -257,7 +256,6 @@ BraveWebCrawler/
 ├── search_common.py         # Common URL discovery utilities
 ├── startpage_mcp.json       # MCP config for single-threaded scripts
 ├── parallel_mcp_launcher.json # Template MCP config for parallel script
-├── mcp-config.json          # Base Playwright config, referenced by parallel_mcp_launcher.json
 ├── pyproject.toml           # Project metadata
 ├── requirements.txt         # Python package dependencies
 ├── README.md                # User-facing documentation
@@ -300,19 +298,7 @@ Template used by `company_parallel_processor.py`.
   }
 }
 ```
-The `--config ./mcp-config.json` part is dynamically replaced with a path to a per-process `runtime-playwright-config.json`.
-
-#### `mcp-config.json`
-Provides base Playwright settings, potentially overridden by dynamic configurations.
-```json
-{
-  "browser": {
-    "userDataDir": "${MCP_PLAYWRIGHT_USER_DATA_DIR}", // This is effectively ignored by company_parallel_processor.py
-    "launchOptions": { "headless": false }
-  }
-}
-```
-For `company_parallel_processor.py`, `userDataDir` and `headless` are set in the dynamically generated `runtime-playwright-config.json`.
+The `--config <dynamic_path_to_runtime_config>` part is dynamically replaced with a path to a per-process `runtime-playwright-config.json` by `company_parallel_processor.py`.
 
 #### `.env`
 ```env
