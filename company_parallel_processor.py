@@ -3,6 +3,7 @@ import os
 import sys
 import argparse
 import csv # Added for CSV handling
+import glob # Added for finding files
 import json # For parsing agent's JSON result
 import multiprocessing # Added for parallel processing
 import shutil # Added for directory cleanup
@@ -295,9 +296,9 @@ def process_company_data_wrapper(company_name: str, company_number: str):
 def console_main() -> None:
     """Entry point for the console script."""
     parser = argparse.ArgumentParser(
-        description="Search for company information from a CSV using Brave/Wikidata/Agent and output to CSV."
+        description="Search for company information from the newest CSV in the 'input' folder using Brave/Wikidata/Agent and output to CSV, in parallel."
     )
-    parser.add_argument("input_csv", help="Path to the input CSV file (columns: company_number,company_name)")
+    # parser.add_argument("input_csv", help="Path to the input CSV file (columns: company_number,company_name)") # Removed
     parser.add_argument("output_csv", help="Path to the output CSV file for results")
     parser.add_argument(
         "--workers",
@@ -306,6 +307,21 @@ def console_main() -> None:
         help="Number of worker processes to use for parallel processing. Defaults to the number of CPU cores."
     )
     args = parser.parse_args()
+
+    # --- Determine the newest input CSV file ---
+    input_dir = "input"
+    if not os.path.isdir(input_dir):
+        print(f"CRITICAL ERROR: Input directory '{input_dir}' not found. Please create it and place your CSV file(s) there. Exiting.", file=sys.stderr)
+        sys.exit(1)
+
+    list_of_csv_files = glob.glob(os.path.join(input_dir, '*.csv'))
+    if not list_of_csv_files:
+        print(f"CRITICAL ERROR: No CSV files found in the '{input_dir}' directory. Exiting.", file=sys.stderr)
+        sys.exit(1)
+    
+    input_csv_path = max(list_of_csv_files, key=os.path.getmtime)
+    print(f"Using the newest input CSV file: {input_csv_path}")
+    # --- End of determining input CSV ---
 
     if not os.getenv("OPENAI_API_KEY"):
         print("CRITICAL ERROR: OPENAI_API_KEY is not set in .env or environment. The agent cannot run. Exiting.", file=sys.stderr)
@@ -320,7 +336,7 @@ def console_main() -> None:
 
     companies_to_process = []
     try:
-        with open(args.input_csv, 'r', encoding='utf-8-sig') as infile: 
+        with open(input_csv_path, 'r', encoding='utf-8-sig') as infile: 
             reader = csv.reader(infile)
             try:
                 input_header = next(reader) 
@@ -328,22 +344,22 @@ def console_main() -> None:
                         input_header[1].strip().lower() == 'company_name'):
                     print(f"Warning: Input CSV header mismatch. Expected 'company_number, company_name', got '{','.join(input_header)}'. Assuming correct column order.", file=sys.stderr)
             except StopIteration:
-                print(f"Error: Input CSV file {args.input_csv} is empty or has no header.", file=sys.stderr)
+                print(f"Error: Input CSV file {input_csv_path} is empty or has no header.", file=sys.stderr)
                 sys.exit(1)
             
             for row in reader:
                 companies_to_process.append(row)
             
-    except FileNotFoundError:
-        print(f"Error: Input CSV file not found at {args.input_csv}", file=sys.stderr)
+    except FileNotFoundError: # Should be caught by earlier checks
+        print(f"Error: Input CSV file not found at {input_csv_path}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"An unexpected error occurred during input CSV reading: {e}", file=sys.stderr)
+        print(f"An unexpected error occurred during input CSV reading from {input_csv_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
     total_companies = len(companies_to_process)
     if total_companies == 0:
-        print(f"No company data found in {args.input_csv} (after header). Exiting.")
+        print(f"No company data found in {input_csv_path} (after header). Exiting.")
         try:
             with open(args.output_csv, 'w', newline='', encoding='utf-8') as outfile:
                 writer = csv.writer(outfile)
@@ -353,7 +369,7 @@ def console_main() -> None:
             print(f"Error writing empty output CSV to {args.output_csv}: {e}", file=sys.stderr)
         sys.exit(0)
         
-    print(f"Found {total_companies} companies to process from {args.input_csv}.")
+    print(f"Found {total_companies} companies to process from {input_csv_path}.")
 
     if total_companies > 0:
         num_workers = args.workers 
