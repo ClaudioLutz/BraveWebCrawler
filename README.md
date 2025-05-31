@@ -109,8 +109,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 # activate venv
 .\venv312\Scripts\Activate.ps1
 #python brave_search "Permapack"
-python company_processor.py output.csv
-python company_parallel_processor.py output.csv --workers 4
+python brave_processor.py output.csv
+python brave_parallel_processing.py output.csv --workers 4
 
 ```
 
@@ -127,10 +127,10 @@ brave-search "Credit Suisse"
 ### Batch CSV Usage
 For processing multiple companies at once, run:
 ```bash
-python company_processor.py input.csv output.csv
+python brave_processor.py input.csv output.csv
 ```
 ```bash
-python company_parallel_processor.py input.csv output.csv
+python brave_parallel_processing.py input.csv output.csv
 ```
 The input CSV must have the columns `company_number` and `company_name` with a header row.
 The output CSV will include the original columns, the extracted data fields, and a `processing_status` column indicating the outcome (e.g., URL source, "AGENT_OK", or specific error codes like "NO_URL_FOUND", "PRE_CHECK_URL_MISMATCH", "AGENT_PROCESSING_TIMEOUT").
@@ -144,7 +144,7 @@ company_number,company_name,official_website,founded,Hauptsitz,Firmenidentifikat
 5678,Another Corp,null,null,null,null,null,null,null,NO_URL_FOUND
 9012,Problem Inc,https://problem.inc,null,null,null,null,null,null,AGENT_PROCESSING_TIMEOUT
 ```
-*(Note: The `ceo`, `founder`, `owner`, `employees`, `better_then_the_rest` fields mentioned in a previous version of this README are not part of the current `EXPECTED_JSON_KEYS` and thus not extracted by default by `company_processor.py` or `company_parallel_processor.py`.)*
+*(Note: The `ceo`, `founder`, `owner`, `employees`, `better_then_the_rest` fields mentioned in a previous version of this README are not part of the current `EXPECTED_JSON_KEYS` and thus not extracted by default by `brave_processor.py` or `brave_parallel_processing.py`.)*
 
 ## Configuration Files
 
@@ -344,8 +344,8 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 BraveWebCrawler/
 ├── .env                     # Environment variables (API keys, etc.)
 ├── brave_search.py          # CLI script for single company search
-├── company_processor.py     # Script for sequential batch processing
-├── company_parallel_processor.py # Script for parallel batch processing
+├── brave_processor.py     # Script for sequential batch processing
+├── brave_parallel_processing.py # Script for parallel batch processing
 ├── search_common.py         # Common URL discovery utilities
 ├── sequential_mcp_config.json       # MCP config for single-threaded scripts
 ├── parallel_mcp_launcher.json # Template MCP config for parallel script

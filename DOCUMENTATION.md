@@ -42,12 +42,12 @@ flowchart TD
 ```
 
 The diagram above illustrates the system architecture.
-- **Core Logic**: Python scripts (`brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) orchestrate the process.
+- **Core Logic**: Python scripts (`brave_search.py`, `brave_processor.py`, `brave_parallel_processing.py`) orchestrate the process.
 - **URL Discovery**: Uses Brave Search API, then Wikidata API.
 - **URL Pre-check**: A quick relevance check is performed on the found URL.
 - **MCP Interaction**: An `MCPClient` communicates with a `Playwright MCP Server`.
-- **Sequential Processing (`company_processor.py`)**: Uses `sequential_mcp_config.json`. Agent processing for each company has a 35-second timeout.
-- **Parallel Processing (`company_parallel_processor.py`)**: Uses `parallel_mcp_launcher.json` as a template. Each worker has isolated browser profiles and configurations. Agent processing within each worker also has a 35-second timeout.
+- **Sequential Processing (`brave_processor.py`)**: Uses `sequential_mcp_config.json`. Agent processing for each company has a 35-second timeout.
+- **Parallel Processing (`brave_parallel_processing.py`)**: Uses `parallel_mcp_launcher.json` as a template. Each worker has isolated browser profiles and configurations. Agent processing within each worker also has a 35-second timeout.
 - **Browser Automation**: Playwright MCP server controls browser instances.
 - **Output**: Results are written to a CSV file, including standard company data fields and a `processing_status` column. This status column indicates the outcome (e.g., URL source, "AGENT_OK", or specific error codes like "NO_URL_FOUND", "PRE_CHECK_URL_MISMATCH", "AGENT_PROCESSING_TIMEOUT").
 
@@ -82,14 +82,14 @@ Logger.set_debug(1) # Or 2 for verbose
 ```
 
 #### 2. MCP Client Configuration
-For single-threaded scripts like `brave_search.py` or `company_processor.py`:
+For single-threaded scripts like `brave_search.py` or `brave_processor.py`:
 ```python
 # Create MCPClient from config file
 client = MCPClient.from_config_file(
     os.path.join(os.path.dirname(__file__), "sequential_mcp_config.json")
 )
 ```
-For `company_parallel_processor.py`, the client configuration is dynamic (see "MCP Server Configuration" below).
+For `brave_parallel_processing.py`, the client configuration is dynamic (see "MCP Server Configuration" below).
 
 #### 3. LLM Initialization
 ```python
@@ -109,29 +109,29 @@ agent = MCPAgent(llm=llm, client=client, max_steps=30)
 #### 5. Batch Processing
 The system provides two scripts for processing multiple companies from a CSV file:
 
-- **Sequential Processing (`company_processor.py`)**:
+- **Sequential Processing (`brave_processor.py`)**:
   Processes companies one after another. Uses `sequential_mcp_config.json`. Incorporates a 35-second timeout for the agent-based data extraction phase for each company and a URL relevance pre-check.
   ```bash
-  python company_processor.py input.csv output.csv
+  python brave_processor.py input.csv output.csv
   ```
   The input file must have `company_number` and `company_name` columns. The output includes a `processing_status` column.
 
-- **Parallel Processing (`company_parallel_processor.py`)**:
+- **Parallel Processing (`brave_parallel_processing.py`)**:
   Offers faster processing by handling multiple companies concurrently. Each worker process uses dynamically generated MCP configurations for isolation, performs a URL relevance pre-check, and adheres to a 35-second timeout for the agent-based data extraction phase.
   ```bash
-  python company_parallel_processor.py input.csv output.csv --workers <num_workers>
+  python brave_parallel_processing.py input.csv output.csv --workers <num_workers>
   ```
   The output includes a `processing_status` column.
 
 #### 6. Shared Search Utilities (`search_common.py`)
 This module consolidates common functionalities for finding company URLs and includes the `is_url_relevant_to_company` pre-check function.
 
-#### 7. Parallel Batch Processing (`company_parallel_processor.py`)
+#### 7. Parallel Batch Processing (`brave_parallel_processing.py`)
 This script utilizes `multiprocessing` and a dynamic MCP configuration strategy to process companies in parallel. Key features include isolated Playwright instances per worker, URL relevance pre-checking, and a 35-second timeout for agent data extraction tasks.
 
 Usage:
 ```bash
-python company_parallel_processor.py input.csv output.csv --workers <num_workers>
+python brave_parallel_processing.py input.csv output.csv --workers <num_workers>
 ```
 - `input.csv`: Path to the input CSV file.
 - `output.csv`: Path where the results will be saved.
@@ -148,7 +148,7 @@ MCP enables AI models to securely connect to external tools. Here, it allows Pyt
 The project uses different MCP launcher configurations:
 
 1.  **`sequential_mcp_config.json` (for single-threaded scripts):**
-    Used by `brave_search.py` and `company_processor.py`.
+    Used by `brave_search.py` and `brave_processor.py`.
     ```json
     {
       "mcpServers": {
@@ -162,7 +162,7 @@ The project uses different MCP launcher configurations:
     *(Note: Pinned version `@playwright/mcp@0.0.26` for stability).*
 
 2.  **`parallel_mcp_launcher.json` (template for parallel processing):**
-    Base template for `company_parallel_processor.py`.
+    Base template for `brave_parallel_processing.py`.
     ```json
     {
       "mcpServers": {
@@ -173,10 +173,10 @@ The project uses different MCP launcher configurations:
       }
     }
     ```
-    The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `company_parallel_processor.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
+    The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `brave_parallel_processing.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
 
-3.  **Dynamic Configuration for Parallel Processing (`company_parallel_processor.py`):**
-    `company_parallel_processor.py` creates two configuration files per worker in a unique temporary directory:
+3.  **Dynamic Configuration for Parallel Processing (`brave_parallel_processing.py`):**
+    `brave_parallel_processing.py` creates two configuration files per worker in a unique temporary directory:
     *   **`runtime-playwright-config.json`**: Specifies `browser.userDataDir` (the unique temp directory) and `browser.launchOptions.headless`.
         ```json
         // Example content for runtime-playwright-config.json
@@ -272,8 +272,8 @@ BraveWebCrawler/
 ├── .env                     # Environment variables (API keys, etc.)
 ├── .gitignore               # Specifies intentionally untracked files
 ├── brave_search.py          # CLI script for single company search
-├── company_processor.py     # Script for sequential batch processing
-├── company_parallel_processor.py # Script for parallel batch processing
+├── brave_processor.py     # Script for sequential batch processing
+├── brave_parallel_processing.py # Script for parallel batch processing
 ├── search_common.py         # Common URL discovery utilities
 ├── sequential_mcp_config.json       # MCP config for single-threaded scripts
 ├── parallel_mcp_launcher.json # Template MCP config for parallel script
@@ -299,7 +299,7 @@ async def main(company_name: str) -> str
 ### Configuration Files
 
 #### `sequential_mcp_config.json`
-Used by `brave_search.py` and `company_processor.py`.
+Used by `brave_search.py` and `brave_processor.py`.
 ```json
 {
   "mcpServers": {
@@ -312,7 +312,7 @@ Used by `brave_search.py` and `company_processor.py`.
 ```
 
 #### `parallel_mcp_launcher.json`
-Template used by `company_parallel_processor.py`.
+Template used by `brave_parallel_processing.py`.
 ```json
 {
   "mcpServers": {
@@ -323,7 +323,7 @@ Template used by `company_parallel_processor.py`.
   }
 }
 ```
-The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `company_parallel_processor.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
+The `<path_to_runtime_playwright_config.json>` placeholder is dynamically replaced by `brave_parallel_processing.py` with the actual path to the worker-specific `runtime-playwright-config.json`.
 
 #### `.env`
 ```env
@@ -382,7 +382,7 @@ This will download the Chromium, Firefox, and WebKit binaries that Playwright ne
 You can now safely run your crawler:
 
 ```bash
-python company_processor.py output.csv
+python brave_processor.py output.csv
 ```
 
 ...

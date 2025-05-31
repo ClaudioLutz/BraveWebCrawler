@@ -299,13 +299,13 @@ async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.
 
     except httpx.TimeoutException:
         # print(f"Timeout fetching URL {url} for relevance pre-check.", file=sys.stderr)
-        return False # Treat timeout as potential mismatch
+        return True # Treat timeout as potential mismatch, but let agent try
     except httpx.RequestError: # Catching general request error
         # print(f"Error fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
-        return False
+        return True # Treat as potential mismatch, but let agent try
     except httpx.HTTPStatusError: # Catching HTTP status errors
         # print(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check.", file=sys.stderr)
-        return False
+        return True # Treat as potential mismatch, but let agent try
     except Exception: # Catching any other unexpected errors
         # print(f"Unexpected error during relevance pre-check for {url}: {e}", file=sys.stderr)
-        return False
+        return True # Treat as potential mismatch, but let agent try
