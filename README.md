@@ -1,3 +1,32 @@
+```ascii
+                 .--~~~~~~~~~~~~~~~~~~--.
+                /                        \
+               |                          |
+               |                          |
+               |                          |
+               |    C  R  A  W  L  E  R   |
+               |                          |
+                \                        /
+                 `--~~~~~~~~~~~~~~~~~~--'
+          \   \   \   \      ||      /   /   /   /
+           \   \   \   \     ||     /   /   /   /
+            \   \   \   \    ||    /   /   /   /
+             *------------*--::--*------------*
+            /   /   /   /    ||    \   \   \   \
+           /   /   /   /     ||     \   \   \   \
+          /   /   /   /      ||      \   \   \   \
+   <<==================================================>>
+          \   \   \   \      ||      /   /   /   /
+           \   \   \   \     ||     /   /   /   /
+            \   \   \   \    ||    /   /   /   /
+             *------------*--::--*------------*
+            /   /   /   /    ||    \   \   \   \
+           /   /   /   /     ||     \   \   \   \
+          /   /   /   /      ||      \   \   \   \
+                 .--~~~~~~~~~~~~~~~~~~--.
+                         (  DATA  )         \   
+                 `--~~~~~~~~~~~~~~~~~~--'
+```
 # Brave Search Company Agent
 
 An intelligent company information extraction agent that uses Brave Search API and Wikidata as fallback to find official company websites, then uses MCP (Model Context Protocol) with Playwright to automatically navigate and extract detailed business data.
