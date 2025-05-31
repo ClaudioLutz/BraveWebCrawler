@@ -7,3 +7,4 @@ pw_test.py
 ${MCP_PLAYWRIGHT_USER_DATA_DIR}/
 startpage_mcp copy.json
 deprecated/
+gitworkflow.txt
