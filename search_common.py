@@ -92,7 +92,7 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
         "X-Subscription-Token": brave_api_key
     }
     params = {
-        "q": f'"{company}" homepage official site',
+        "q": f'"{company}" offizielle homepage',
         "count": count,
         "country": "ch",
         "search_lang": "de",

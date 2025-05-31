@@ -209,7 +209,6 @@ Die offizielle Webseite für "{company_name}" wurde als "{root_url_for_prompt}" 
 1. Öffne diese URL: {root_url_for_prompt}
 2. Durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte, /contact, /legal)
    und sammle die unten genannten Fakten. Achte darauf, die aktuellsten Informationen zu finden.
-WICHTIG: WENN DER "{company_name}" NICHT MIT "{root_url_for_prompt}" ZUSAMMENPASST MUSST DU IN ALLE FELDER AUSSER "official_website" NULL SCHREIBEN UND DIE SUCHE ABBRECHEN. "official_website" soll "{root_url_for_prompt}" bleiben.
 Fakten zu sammeln:
     • Gründungsjahr (JJJJ)
     • Offizielle Website (die bereits ermittelte Root-URL: "{root_url_for_prompt}")
@@ -230,7 +229,7 @@ Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor od
 }}"""
 
         try:
-            agent_task = agent.run(prompt, max_steps=30)
+            agent_task = agent.run(prompt, max_steps=20)
             agent_result_str = await asyncio.wait_for(agent_task, timeout=AGENT_PROCESSING_TIMEOUT)
             agent_json_result = json.loads(agent_result_str)
             
