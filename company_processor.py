@@ -26,7 +26,8 @@ from search_common import (
     select_best_url_with_llm,
     get_brave_search_candidates,
     get_wikidata_homepage,
-    BLACKLIST
+    BLACKLIST,
+    is_url_relevant_to_company # Added import
 )
 
 # Global variables for API Keys - these will be set ONCE in console_main
@@ -46,60 +47,7 @@ AGENT_PROCESSING_TIMEOUT = 60  # 1 minute
 # Enable mcp_use debug logging
 Logger.set_debug(1)
 
-async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.AsyncClient) -> bool:
-    """
-    Performs a pre-check to see if the URL seems relevant to the company name
-    by fetching the page title and checking against the domain.
-    """
-    if not url or url == "null":
-        return True
-
-    try:
-        print(f"Pre-check: Fetching {url} for title...")
-        response = await client.get(url, follow_redirects=True, timeout=10.0)
-        response.raise_for_status()
-        html_content = response.text
-
-        title_match = re.search(r"<title>(.*?)</title>", html_content, re.IGNORECASE | re.DOTALL)
-        page_title = title_match.group(1).strip() if title_match else ""
-
-        normalized_company_name = company_name.lower().replace(" ag", "").replace(" gmbh", "").replace(" sa", "").replace(" sàrl", "").replace(".", "").replace(",", "").strip()
-        normalized_page_title = page_title.lower()
-        
-        parsed_url_obj = urlparse(url)
-        domain = parsed_url_obj.netloc.lower()
-
-        company_name_parts = [part for part in normalized_company_name.split() if len(part) > 2]
-        if not company_name_parts:
-             company_name_parts = [normalized_company_name]
-
-        title_match_found = any(part in normalized_page_title for part in company_name_parts)
-        domain_match_found = any(part in domain.replace("www.", "") for part in company_name_parts)
-        
-        if page_title and not any(generic in normalized_page_title for generic in ["home", "startseite", "accueil", "benvenuto"]):
-            if title_match_found:
-                print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (title match).")
-                return True
-        
-        if domain_match_found:
-            print(f"Relevance pre-check for '{company_name}' at '{url}': Domain='{domain}'. Seems relevant (domain match).")
-            return True
-        
-        print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}', Domain='{domain}'. Potential mismatch.")
-        return False
-
-    except httpx.TimeoutException:
-        print(f"Timeout fetching URL {url} for relevance pre-check.", file=sys.stderr)
-        return False
-    except httpx.RequestError as e:
-        print(f"Error fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
-        return False
-    except httpx.HTTPStatusError as e:
-        print(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check.", file=sys.stderr)
-        return False
-    except Exception as e:
-        print(f"Unexpected error during relevance pre-check for {url}: {e}", file=sys.stderr)
-        return False
+# is_url_relevant_to_company is now imported from search_common
 
 async def _process_company_data_internal(company_name: str, company_number: str, brave_api_key: str | None, openai_api_key: str) -> Dict[str, Any]:
     """
