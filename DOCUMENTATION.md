@@ -22,11 +22,18 @@ flowchart TD
 
   subgraph CompanyTask["Per-company task"]
     direction TB
-    K1[Locate company website] 
-    K2[Set up temporary browser profile]
-    K3[Run agent to scrape details]
-    K4[Clean up temp files]
-    K1 --> K2 --> K3 --> K4
+    K1[Locate company website] --> K1a{URL Found?}
+    K1a -- Yes --> K1b[URL Relevance Pre-check]
+    K1a -- No --> K4[Set status: NO_URL_FOUND]
+    K1b -- Relevant --> K2[Set up temporary browser profile]
+    K1b -- Not Relevant --> K4b[Set status: PRE_CHECK_URL_MISMATCH]
+    K2 --> K3[Run agent to scrape details (35s timeout)]
+    K3 -- Success --> K3a[Set status: AGENT_OK]
+    K3 -- Timeout/Error --> K3b[Set status: AGENT_ERROR/TIMEOUT]
+    K3a --> K4c[Clean up temp files]
+    K3b --> K4c
+    K4b --> K4c
+    K4 --> K4c
   end
 
   F --> CompanyTask
@@ -35,17 +42,14 @@ flowchart TD
 ```
 
 The diagram above illustrates the system architecture.
-- **Core Logic**: Python scripts (`brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) orchestrate the process, utilizing Brave Search API, Wikidata API, OpenAI LLM, and environment configurations from `.env`.
-- **MCP Interaction**: An `MCPClient` within the Python scripts communicates with a `Playwright MCP Server`.
-- **Sequential Processing (`brave_search.py`, `company_processor.py`)**: The `MCPClient` is configured using `sequential_mcp_config.json`, which directly instructs how to launch the Playwright MCP server.
-- **Parallel Processing (`company_parallel_processor.py`)**:
-    - It uses `parallel_mcp_launcher.json` as a template.
-    - For each worker process, it dynamically creates:
-        1.  `runtime-playwright-config.json`: Specifies a unique `userDataDir` for browser isolation and other Playwright settings (e.g., headless mode).
-        2.  `runtime-mcp-launcher.json`: A copy of the template, but its `--config` argument is updated to point to the worker's specific `runtime-playwright-config.json`.
-    - The `MCPClient` in each worker then uses its unique `runtime-mcp-launcher.json` to connect to an isolated Playwright MCP server instance.
-- **Browser Automation**: The Playwright MCP server controls browser instances for website interaction and data extraction.
-- **Output**: The process results in a JSON output containing company information.
+- **Core Logic**: Python scripts (`brave_search.py`, `company_processor.py`, `company_parallel_processor.py`) orchestrate the process.
+- **URL Discovery**: Uses Brave Search API, then Wikidata API.
+- **URL Pre-check**: A quick relevance check is performed on the found URL.
+- **MCP Interaction**: An `MCPClient` communicates with a `Playwright MCP Server`.
+- **Sequential Processing (`company_processor.py`)**: Uses `sequential_mcp_config.json`. Agent processing for each company has a 35-second timeout.
+- **Parallel Processing (`company_parallel_processor.py`)**: Uses `parallel_mcp_launcher.json` as a template. Each worker has isolated browser profiles and configurations. Agent processing within each worker also has a 35-second timeout.
+- **Browser Automation**: Playwright MCP server controls browser instances.
+- **Output**: Results are written to a CSV file, including standard company data fields and a `processing_status` column. This status column indicates the outcome (e.g., URL source, "AGENT_OK", or specific error codes like "NO_URL_FOUND", "PRE_CHECK_URL_MISMATCH", "AGENT_PROCESSING_TIMEOUT").
 
 ### Technology Stack
 
@@ -106,23 +110,24 @@ agent = MCPAgent(llm=llm, client=client, max_steps=30)
 The system provides two scripts for processing multiple companies from a CSV file:
 
 - **Sequential Processing (`company_processor.py`)**:
-  Processes companies one after another. Uses `sequential_mcp_config.json`.
+  Processes companies one after another. Uses `sequential_mcp_config.json`. Incorporates a 35-second timeout for the agent-based data extraction phase for each company and a URL relevance pre-check.
   ```bash
   python company_processor.py input.csv output.csv
   ```
-  The input file must have `company_number` and `company_name` columns.
+  The input file must have `company_number` and `company_name` columns. The output includes a `processing_status` column.
 
 - **Parallel Processing (`company_parallel_processor.py`)**:
-  Offers significantly faster processing by handling multiple companies concurrently using dynamically generated MCP configurations for isolation.
+  Offers faster processing by handling multiple companies concurrently. Each worker process uses dynamically generated MCP configurations for isolation, performs a URL relevance pre-check, and adheres to a 35-second timeout for the agent-based data extraction phase.
   ```bash
   python company_parallel_processor.py input.csv output.csv --workers <num_workers>
   ```
+  The output includes a `processing_status` column.
 
 #### 6. Shared Search Utilities (`search_common.py`)
-This module consolidates common functionalities for finding company URLs.
+This module consolidates common functionalities for finding company URLs and includes the `is_url_relevant_to_company` pre-check function.
 
 #### 7. Parallel Batch Processing (`company_parallel_processor.py`)
-This script utilizes `multiprocessing` and a dynamic MCP configuration strategy to process companies in parallel, ensuring each Playwright instance is isolated.
+This script utilizes `multiprocessing` and a dynamic MCP configuration strategy to process companies in parallel. Key features include isolated Playwright instances per worker, URL relevance pre-checking, and a 35-second timeout for agent data extraction tasks.
 
 Usage:
 ```bash
@@ -377,7 +382,7 @@ This will download the Chromium, Firefox, and WebKit binaries that Playwright ne
 You can now safely run your crawler:
 
 ```bash
-python company_processor.py input.csv output.csv
+python company_processor.py output.csv
 ```
 
 ...

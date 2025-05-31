@@ -72,8 +72,17 @@ npx --version   # Should show version number
 ## Usage
 
 ### Basic Usage
-```bash
-brave-search "Company Name"
+
+- **PowerShell**  
+```powershell
+# (just once per session, to allow scripts)
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+# activate venv
+.\venv312\Scripts\Activate.ps1
+#python brave_search "Permapack"
+python company_processor.py output.csv
+python company_parallel_processor.py output.csv --workers 4
+
 ```
 
 ### Examples
@@ -95,25 +104,18 @@ python company_processor.py input.csv output.csv
 python company_parallel_processor.py input.csv output.csv
 ```
 The input CSV must have the columns `company_number` and `company_name` with a header row.
+The output CSV will include the original columns, the extracted data fields, and a `processing_status` column indicating the outcome (e.g., URL source, "AGENT_OK", or specific error codes like "NO_URL_FOUND", "PRE_CHECK_URL_MISMATCH", "AGENT_PROCESSING_TIMEOUT").
 
 ### Expected Output
-The script returns a JSON object with the following company information:
-```json
-{
-  "official_website": "https://company.com",
-  "ceo": "John Doe",
-  "founder": "Jane Smith, Bob Johnson",
-  "owner": "Parent Company Ltd",
-  "employees": "1000-1500",
-  "founded": "1995",
-  "better_then_the_rest": "innovative technology solutions",
-  "Hauptsitz": "Bahnhofstrasse 1, 8001 Zürich",
-  "Firmenidentifikationsnummer": "CHE-123.456.789",
-  "HauptTelefonnummer": "+41 44 123 45 67",
-  "HauptEmailAdresse": "info@company.com",
-  "Geschäftsbericht": "https://company.com/annual-report.pdf"
-}
+The script's CSV output includes the following company information fields, plus a `processing_status` column:
 ```
+company_number,company_name,official_website,founded,Hauptsitz,Firmenidentifikationsnummer,HauptTelefonnummer,HauptEmailAdresse,Geschäftsbericht,processing_status
+...
+1234,Example AG,https://example.com,2000,"Example Street 1, 8000 Zurich",CHE-111.222.333,+41 44 555 6677,info@example.com,https://example.com/report.pdf,Brave Search + LLM (AGENT_OK)
+5678,Another Corp,null,null,null,null,null,null,null,NO_URL_FOUND
+9012,Problem Inc,https://problem.inc,null,null,null,null,null,null,AGENT_PROCESSING_TIMEOUT
+```
+*(Note: The `ceo`, `founder`, `owner`, `employees`, `better_then_the_rest` fields mentioned in a previous version of this README are not part of the current `EXPECTED_JSON_KEYS` and thus not extracted by default by `company_processor.py` or `company_parallel_processor.py`.)*
 
 ## Configuration Files
 
@@ -290,12 +292,13 @@ Logger.set_debug(2)  # Change to 2 for verbose debugging
 ## How It Works
 
 1. **Initialization**: Loads environment variables and creates MCP client
-2. **Primary Search**: Uses Brave Search API to find official company website
-3. **Fallback Search**: If Brave Search fails, queries Wikidata for official website
-4. **Website Navigation**: Uses Playwright MCP server to open the found website
-5. **Data Extraction**: Crawls relevant pages (about, contact, impressum, etc.)
-6. **AI Analysis**: Uses GPT to extract structured company information
-7. **Output**: Returns formatted JSON with Swiss-specific company details
+2. **Primary Search**: Uses Brave Search API to find official company website.
+3. **Fallback Search**: If Brave Search fails, queries Wikidata for official website.
+4. **URL Pre-check**: Performs a quick relevance check on the found URL by examining its title and domain against the company name.
+5. **Website Navigation**: Uses Playwright MCP server to open the found website (if relevant).
+6. **Data Extraction**: Crawls relevant pages (about, contact, impressum, etc.) with a 35-second timeout for the agent's web interaction and data extraction task per company.
+7. **AI Analysis**: Uses GPT to extract structured company information.
+8. **Output**: Writes results to a CSV file, including a `processing_status` column detailing the outcome for each company.
 
 ## Supported Models
 
