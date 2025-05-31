@@ -23,13 +23,8 @@ from pathlib import Path
 
 load_dotenv()
 
-from search_common import (
-    select_best_url_with_llm,
-    get_brave_search_candidates,
-    get_wikidata_homepage,
-    BLACKLIST,
-    is_url_relevant_to_company
-)
+# search_common imports removed as they are related to the old search method.
+# For this Startpage-based version, these specific functions are not needed.
 
 AGENT_PROCESSING_TIMEOUT = 50  # 35 seconds
 EXPECTED_JSON_KEYS = [ # These are the data fields the agent is expected to return
@@ -86,67 +81,20 @@ Logger.set_debug(1)
 
 async def process_company_data(company_name: str, company_number: str) -> Dict[str, Any]:
     result_data = {key: "null" for key in EXPECTED_JSON_KEYS}
-    result_data[PROCESSING_STATUS_COLUMN] = "PENDING_URL_SEARCH" # Initial status
+    # Initial status, agent will try to find URL and then process.
+    result_data[PROCESSING_STATUS_COLUMN] = "PENDING_AGENT_PROCESSING"
     tmp_profile_dir = None
     client_mcp = None
+    source_of_url = "Startpage Agent" # Default source if agent succeeds
 
     try:
-        llm_url_selector = None
         openai_api_key_val = os.getenv("OPENAI_API_KEY")
-        if openai_api_key_val:
-            try:
-                llm_url_selector = ChatOpenAI(model="gpt-4.1-mini", temperature=0, api_key=SecretStr(openai_api_key_val))
-            except Exception as e:
-                print(f"[{os.getpid()}] Error initializing LLM for URL selection for '{company_name}': {e}.", file=sys.stderr)
-        
-        company_url = None
-        source_of_url = "None"
-        brave_api_key_val = os.getenv("BRAVE_API_KEY")
+        # LLM for URL selection and Brave/Wikidata search logic removed.
+        # URL pre-check logic removed. Agent will handle URL identification and relevance.
 
-        if brave_api_key_val:
-            brave_candidates = get_brave_search_candidates(company_name, brave_api_key=brave_api_key_val, count=5)
-            if brave_candidates:
-                if llm_url_selector:
-                    company_url = select_best_url_with_llm(company_name, brave_candidates, llm_url_selector)
-                    if company_url: source_of_url = "Brave Search + LLM"
-                if not company_url: # Fallback
-                    ch_urls = [c['url'] for c in brave_candidates if c['is_ch_domain'] and c['company_match_in_host']]
-                    other_urls = [c['url'] for c in brave_candidates if not c['is_ch_domain'] and c['company_match_in_host']]
-                    any_urls = [c['url'] for c in brave_candidates]
-                    if ch_urls: company_url = ch_urls[0]
-                    elif other_urls: company_url = other_urls[0]
-                    elif any_urls: company_url = any_urls[0]
-                    if company_url and source_of_url == "None": source_of_url = "Brave Search (heuristic fallback)"
-        
-        if not company_url:
-            company_url = get_wikidata_homepage(company_name)
-            if company_url: source_of_url = "Wikidata"
-
-        root_url_for_prompt = "null"
-        if company_url:
-            parsed_found_url = urlparse(company_url)
-            root_url_for_prompt = f"{parsed_found_url.scheme}://{parsed_found_url.netloc}"
-            result_data["official_website"] = root_url_for_prompt
-            result_data[PROCESSING_STATUS_COLUMN] = source_of_url # URL found, status is its source
-        else:
-            result_data["official_website"] = "null"
-            result_data[PROCESSING_STATUS_COLUMN] = "NO_URL_FOUND"
-            print(f"[{os.getpid()}] Could not find URL for '{company_name}'. Status: {result_data[PROCESSING_STATUS_COLUMN]}", file=sys.stderr)
-            return result_data # No URL, no agent processing
-
-        # URL Relevance Pre-check
-        async with httpx.AsyncClient() as http_client_for_check:
-            is_relevant = await is_url_relevant_to_company(root_url_for_prompt, company_name, http_client_for_check)
-            if not is_relevant:
-                error_msg = "PRE_CHECK_URL_MISMATCH"
-                print(f"[{os.getpid()}] URL '{root_url_for_prompt}' deemed NOT relevant to '{company_name}' by pre-check. Skipping agent.", file=sys.stderr)
-                result_data[PROCESSING_STATUS_COLUMN] = error_msg
-                # official_website remains the URL that failed the check
-                return result_data
-
-        # If URL found and relevant, proceed to agent setup
-        result_data[PROCESSING_STATUS_COLUMN] = f"{source_of_url} (PENDING_AGENT)"
-
+        # Agent setup will occur directly.
+        # `company_url` and `root_url_for_prompt` will be determined by the agent's output or remain "null".
+        # `result_data["official_website"]` will be populated from agent_json_result.
 
         tmp_profile_dir = Path(tempfile.gettempdir()) / f"mcp_playwright_profile_{os.getpid()}_{time.time_ns()}"
         try:
@@ -233,38 +181,26 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
         agent = MCPAgent(llm=agent_llm_for_mcp, client=client_mcp, max_steps=30)
 
         prompt = f"""
-Du bist ein Web-Agent mit Playwright-Werkzeugen.
-Die initial vermutete Webseite für "{company_name}" ist "{root_url_for_prompt}" (Quelle: {source_of_url}).
-
-Deine Aufgabe ist es, die folgenden Fakten über "{company_name}" zu finden und zu extrahieren.
-
-1.  **Überprüfung und Navigation:**
-    a. Öffne die initial vermutete URL: {root_url_for_prompt}
-    b. Überprüfe sorgfältig, ob diese Webseite tatsächlich die offizielle Webseite von "{company_name}" ist. Achte auf den Firmennamen, das Logo, und den Inhalt.
-    c. **Wenn die Seite NICHT die korrekte Webseite ist:**
-        i. Navigiere zu www.startpage.com.
-        ii. Suche nach "{company_name}".
-        iii. Analysiere die Suchergebnisse und identifiziere die wahrscheinlichste offizielle Webseite. Navigiere zu dieser Seite.
-        iv. Wenn du nach der Startpage-Suche immer noch keine passende Seite findest oder die Navigation fehlschlägt, verwende die ursprüngliche URL {root_url_for_prompt} als Basis für die Faktensuche oder setze Felder auf "null", falls dort nichts zu finden ist. Die "official_website" im JSON sollte dann {root_url_for_prompt} sein.
-    d. **Wenn die Seite die korrekte Webseite ist (oder du nach der Startpage-Suche auf der korrekten Seite gelandet bist):**
-        i. Die URL, auf der du dich befindest und von der du Daten extrahierst, ist die "official_website".
-        ii. Durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte, /contact, /legal) und sammle die unten genannten Fakten. Achte darauf, die aktuellsten Informationen zu finden.
-
-2.  **Fakten zu sammeln:**
+Du bist ein Web-Agent mit Playwright-Werkzeugen. Deine Aufgabe ist es, Informationen über das Unternehmen "{company_name}" zu finden.
+1. Gehe zu https://www.startpage.com.
+2. Suche nach dem folgenden Begriff: "{company_name} webseite schweiz".
+3. Analysiere die Suchergebnisse und identifiziere die offizielle Webseite des Unternehmens "{company_name}".
+   Klicke auf das relevanteste Suchergebnis, um zur Webseite zu gelangen.
+   Wenn du keine klare offizielle Webseite findest oder die Ergebnisse nicht eindeutig sind, setze "official_website" auf "null" und gib die anderen Felder ebenfalls als "null" zurück.
+4. Wenn du eine Webseite geöffnet hast, durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte, /contact, /legal)
+   und sammle die unten genannten Fakten. Achte darauf, die aktuellsten Informationen zu finden.
+Fakten zu sammeln:
+    • Offizielle Website (die URL der Webseite, die du als offiziell identifiziert hast. Gib die Root-URL an, z.B. https://beispiel.com)
     • Gründungsjahr (JJJJ)
-    • Offizielle Website (die URL, die du in Schritt 1 als korrekt identifiziert und für die Datensammlung verwendet hast)
-    • Addresse Hauptsitz (vollständige Adresse, formatiert als: Strasse Hausnummer, PLZ Ort, Land. Beispiel: Musterstrasse 123, 8000 Zürich, Schweiz)
+    • Addresse Hauptsitz (vollständige Adresse)
     • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
     • Haupt-Telefonnummer (internationales Format wenn möglich)
     • Haupt-Emailadresse (allgemeine Kontakt-Email)
     • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
     • Der auf der Webseite genannte Firmenname (z.B. aus dem Impressum oder der "Über uns" Seite). Dies sollte der reine Textname sein, keine URL.
-
-Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor oder danach.
-Der Wert für "official_website" MUSS die URL sein, von der du die Informationen letztendlich gesammelt hast.
-Wenn eine Information nicht gefunden werden kann, verwende "null" als Wert.
+Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor oder danach:
 {{
-  "official_website": "<URL der Webseite, von der die Daten tatsächlich gesammelt wurden>",
+  "official_website": "<URL der gefundenen offiziellen Webseite oder null>",
   "founded": "<jahr JJJJ oder null>",
   "Hauptsitz": "<vollständige Adresse oder null>",
   "Firmenidentifikationsnummer": "<ID oder null>",
@@ -275,16 +211,33 @@ Wenn eine Information nicht gefunden werden kann, verwende "null" als Wert.
 }}"""
 
         try:
-            agent_task = agent.run(prompt, max_steps=20)
+            agent_task = agent.run(prompt, max_steps=25) # Max steps adjusted for potential search + site navigation
             agent_result_str = await asyncio.wait_for(agent_task, timeout=AGENT_PROCESSING_TIMEOUT)
             agent_json_result = json.loads(agent_result_str)
             
+            # Populate all keys from agent result, including official_website
             for key in EXPECTED_JSON_KEYS:
-                # official_website will be updated by the agent's response if provided,
-                # overwriting the initial root_url_for_prompt if the agent found a better URL.
                 result_data[key] = agent_json_result.get(key, "null")
-            # Agent ran successfully, update status to reflect this.
-            result_data[PROCESSING_STATUS_COLUMN] = f"{source_of_url} (AGENT_OK)"
+
+            if result_data["official_website"] and result_data["official_website"] != "null":
+                # Attempt to normalize the URL to its root form if a valid one was returned
+                try:
+                    parsed_agent_url = urlparse(result_data["official_website"])
+                    if parsed_agent_url.scheme and parsed_agent_url.netloc:
+                         result_data["official_website"] = f"{parsed_agent_url.scheme}://{parsed_agent_url.netloc}"
+                    else: # If parsing fails to get scheme/netloc, it might be an invalid or partial URL
+                         result_data["official_website"] = "null" # Treat as not found
+                         result_data[PROCESSING_STATUS_COLUMN] = "AGENT_BAD_URL_FORMAT"
+                except Exception: # Catch any error during URL parsing
+                    result_data["official_website"] = "null"
+                    result_data[PROCESSING_STATUS_COLUMN] = "AGENT_URL_PARSE_ERROR"
+            
+            if result_data["official_website"] == "null" and result_data[PROCESSING_STATUS_COLUMN] == "PENDING_AGENT_PROCESSING":
+                 # If agent explicitly returned null for website, or it was invalidated.
+                result_data[PROCESSING_STATUS_COLUMN] = "AGENT_NO_URL_FOUND"
+            elif result_data[PROCESSING_STATUS_COLUMN] == "PENDING_AGENT_PROCESSING": # If status hasn't been set to an error by URL parsing
+                result_data[PROCESSING_STATUS_COLUMN] = f"{source_of_url} (AGENT_OK)"
+
 
         except asyncio.TimeoutError:
             error_msg = "AGENT_PROCESSING_TIMEOUT"
@@ -299,8 +252,8 @@ Wenn eine Information nicht gefunden werden kann, verwende "null" als Wert.
     except Exception as e_outer:
         # This catches errors from setup before agent.run or if agent.run itself fails non-specifically
         # If status was already set to a specific error, don't overwrite with a generic one.
-        if "PENDING" in result_data[PROCESSING_STATUS_COLUMN] or result_data[PROCESSING_STATUS_COLUMN] == "OK" or "AGENT_OK" in result_data[PROCESSING_STATUS_COLUMN] or source_of_url in result_data[PROCESSING_STATUS_COLUMN]:
-            # Only overwrite if it's still a "good" or pending status
+        if result_data[PROCESSING_STATUS_COLUMN] == "PENDING_AGENT_PROCESSING":
+            # Only overwrite if it's still the initial pending status
             error_msg_outer = f"OUTER_PROCESSING_ERROR: {str(e_outer)[:30]}"
             result_data[PROCESSING_STATUS_COLUMN] = error_msg_outer
         print(f"[{os.getpid()}] Outer error processing company '{company_name}': {e_outer}. Final status: {result_data[PROCESSING_STATUS_COLUMN]}", file=sys.stderr)
