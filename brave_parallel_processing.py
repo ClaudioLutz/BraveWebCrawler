@@ -3,403 +3,273 @@ import os
 import sys
 import argparse
 import csv
-import glob
 import json
 import multiprocessing
-import shutil
 import time
-import psutil
-from dotenv import load_dotenv
-from mcp_use import MCPAgent, MCPClient
-from mcp_use.logging import Logger
-from langchain_openai import ChatOpenAI
-from pydantic.types import SecretStr
-import httpx
-import re
-from urllib.parse import urlparse
-from typing import Dict, Any
-import tempfile
 from pathlib import Path
+from typing import Dict, Any, List, Tuple
+import logging
+
+from dotenv import load_dotenv
+
+import core_processing
+from logging_utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-from search_common import (
-    select_best_url_with_llm,
-    get_brave_search_candidates,
-    get_wikidata_homepage,
-    BLACKLIST,
-    is_url_relevant_to_company
-)
+PROCESSING_STATUS_COLUMN = "processing_status"
 
-AGENT_PROCESSING_TIMEOUT = 50  # 35 seconds
-EXPECTED_JSON_KEYS = [ # These are the data fields the agent is expected to return
-    "official_website", "founded", "Hauptsitz", "Firmenidentifikationsnummer",
-    "HauptTelefonnummer", "HauptEmailAdresse", "Geschäftsbericht", "extracted_company_name"
-]
-PROCESSING_STATUS_COLUMN = "processing_status" # Name for the new status column
-
-def rmtree_with_retry(path_to_remove: Path, attempts: int = 5, delay_seconds: float = 1.0):
-    for attempt in range(attempts):
-        try:
-            shutil.rmtree(path_to_remove)
-            print(f"[{os.getpid()}] Successfully removed directory: {path_to_remove} on attempt {attempt + 1}")
-            return
-        except PermissionError as e:
-            print(f"[{os.getpid()}] PermissionError removing {path_to_remove} on attempt {attempt + 1}/{attempts}: {e}", file=sys.stderr)
-            if attempt < attempts - 1:
-                time.sleep(delay_seconds)
-            else:
-                print(f"[{os.getpid()}] Failed to remove directory {path_to_remove} after {attempts} attempts.", file=sys.stderr)
-        except FileNotFoundError:
-            print(f"[{os.getpid()}] Directory not found for removal (already deleted?): {path_to_remove}", file=sys.stderr)
-            return
-        except Exception as e:
-            print(f"[{os.getpid()}] Unexpected error removing {path_to_remove} on attempt {attempt + 1}: {e}", file=sys.stderr)
-            if attempt < attempts - 1:
-                time.sleep(delay_seconds)
-            else:
-                print(f"[{os.getpid()}] Failed to remove directory {path_to_remove} due to unexpected error after {attempts} attempts.", file=sys.stderr)
-    print(f"[{os.getpid()}] Warning: Directory {path_to_remove} could not be deleted after all retries.", file=sys.stderr)
-
-def kill_chrome_processes_using(path: Path):
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        try:
-            if 'chrome.exe' in proc.info['name'].lower():
-                cmdline_args = proc.info['cmdline']
-                if cmdline_args:
-                    cmdline_str = ' '.join(cmdline_args)
-                    if str(path) in cmdline_str:
-                        print(f"[{os.getpid()}] Terminating chrome process {proc.info['pid']} using {path}")
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=0.5)
-                        except psutil.TimeoutExpired:
-                            print(f"[{os.getpid()}] Chrome process {proc.info['pid']} did not terminate gracefully, killing.")
-                            proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
-        except Exception as e:
-            print(f"[{os.getpid()}] Unexpected error when checking process {proc.info.get('pid', 'N/A')}: {e}", file=sys.stderr)
-            continue
-
-Logger.set_debug(1)
-
-async def process_company_data(company_name: str, company_number: str) -> Dict[str, Any]:
-    result_data = {key: "null" for key in EXPECTED_JSON_KEYS}
-    result_data[PROCESSING_STATUS_COLUMN] = "PENDING_URL_SEARCH" # Initial status
-    tmp_profile_dir = None
-    client_mcp = None
-
+def run_company_processing_parallel_wrapper(
+    company_name: str,
+    company_number: str,
+    shared_config_dict: Dict[str, Any],
+    mcp_dynamic_params_dict: Dict[str, Any]
+) -> Dict[str, Any]:
+    worker_logger = logging.getLogger(f"{__name__}.worker.{os.getpid()}")
+    worker_logger.info(f"Processing: {company_name} ({company_number})")
     try:
-        llm_url_selector = None
-        openai_api_key_val = os.getenv("OPENAI_API_KEY")
-        if openai_api_key_val:
-            try:
-                llm_url_selector = ChatOpenAI(model="gpt-4.1-mini", temperature=0, api_key=SecretStr(openai_api_key_val))
-            except Exception as e:
-                print(f"[{os.getpid()}] Error initializing LLM for URL selection for '{company_name}': {e}.", file=sys.stderr)
-        
-        company_url = None
-        source_of_url = "None"
-        brave_api_key_val = os.getenv("BRAVE_API_KEY")
-
-        if brave_api_key_val:
-            brave_candidates = get_brave_search_candidates(company_name, brave_api_key=brave_api_key_val, count=5)
-            if brave_candidates:
-                if llm_url_selector:
-                    company_url = select_best_url_with_llm(company_name, brave_candidates, llm_url_selector)
-                    if company_url: source_of_url = "Brave Search + LLM"
-                if not company_url: # Fallback
-                    ch_urls = [c['url'] for c in brave_candidates if c['is_ch_domain'] and c['company_match_in_host']]
-                    other_urls = [c['url'] for c in brave_candidates if not c['is_ch_domain'] and c['company_match_in_host']]
-                    any_urls = [c['url'] for c in brave_candidates]
-                    if ch_urls: company_url = ch_urls[0]
-                    elif other_urls: company_url = other_urls[0]
-                    elif any_urls: company_url = any_urls[0]
-                    if company_url and source_of_url == "None": source_of_url = "Brave Search (heuristic fallback)"
-        
-        if not company_url:
-            company_url = get_wikidata_homepage(company_name)
-            if company_url: source_of_url = "Wikidata"
-
-        root_url_for_prompt = "null"
-        if company_url:
-            parsed_found_url = urlparse(company_url)
-            root_url_for_prompt = f"{parsed_found_url.scheme}://{parsed_found_url.netloc}"
-            result_data["official_website"] = root_url_for_prompt
-            result_data[PROCESSING_STATUS_COLUMN] = source_of_url # URL found, status is its source
-        else:
-            result_data["official_website"] = "null"
-            result_data[PROCESSING_STATUS_COLUMN] = "NO_URL_FOUND"
-            print(f"[{os.getpid()}] Could not find URL for '{company_name}'. Status: {result_data[PROCESSING_STATUS_COLUMN]}", file=sys.stderr)
-            return result_data # No URL, no agent processing
-
-        # URL Relevance Pre-check
-        async with httpx.AsyncClient() as http_client_for_check:
-            is_relevant = await is_url_relevant_to_company(root_url_for_prompt, company_name, http_client_for_check)
-            if not is_relevant:
-                error_msg = "PRE_CHECK_URL_MISMATCH"
-                print(f"[{os.getpid()}] URL '{root_url_for_prompt}' deemed NOT relevant to '{company_name}' by pre-check. Skipping agent.", file=sys.stderr)
-                result_data[PROCESSING_STATUS_COLUMN] = error_msg
-                # official_website remains the URL that failed the check
-                return result_data
-
-        # If URL found and relevant, proceed to agent setup
-        result_data[PROCESSING_STATUS_COLUMN] = f"{source_of_url} (PENDING_AGENT)"
-
-
-        tmp_profile_dir = Path(tempfile.gettempdir()) / f"mcp_playwright_profile_{os.getpid()}_{time.time_ns()}"
-        try:
-            tmp_profile_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e_mkdir:
-            error_msg = "TEMP_DIR_CREATION_ERROR"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-            # Re-raise to be caught by outer try-except, which will then use this status
-            raise Exception(f"{error_msg}: {e_mkdir}") 
-
-        if not openai_api_key_val:
-            error_msg = "AGENT_OPENAI_KEY_MISSING"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-            raise Exception(error_msg)
-
-        agent_llm_for_mcp = None
-        try:
-            agent_llm_for_mcp = ChatOpenAI(model="gpt-4.1-mini", temperature=0, api_key=SecretStr(openai_api_key_val))
-        except Exception as e:
-            error_msg = "AGENT_LLM_INIT_FAILURE"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-            raise Exception(f"{error_msg}: {e}")
-
-        # Calculate window position based on PID
-        pid = os.getpid()
-        base_window_width = 800  # Approximate width
-        base_window_height = 600 # Approximate height
-        windows_per_row = 2 # Two windows side-by-side
-        max_rows_on_screen = 1 # Only one row of windows
-        x_padding = 20 # Horizontal padding between windows
-        y_padding = 40 # Vertical padding between windows (and for taskbar etc.)
-
-        # Calculate column and row index for the window
-        col_index = pid % windows_per_row
-        row_index = (pid // windows_per_row) % max_rows_on_screen # Cycle through max_rows_on_screen
-
-        x_pos = col_index * (base_window_width + x_padding)
-        y_pos = row_index * (base_window_height + y_padding)
-
-        playwright_config_content = {
-            "browser": {
-                "userDataDir": str(tmp_profile_dir.resolve()),
-                "launchOptions": {
-                    "headless": False,
-                    "args": [
-                        "--disable-breakpad",
-                        "--disable-extensions",
-                        f"--window-position={x_pos},{y_pos}",
-                        f"--window-size={base_window_width},{base_window_height}"
-                    ]
-                }
-            }
-        }
-        per_process_playwright_config_path = tmp_profile_dir / "runtime-playwright-config.json"
-        with open(per_process_playwright_config_path, 'w') as f: json.dump(playwright_config_content, f, indent=2)
-
-        base_mcp_launcher_path = Path(__file__).parent / "parallel_mcp_launcher.json"
-        if not base_mcp_launcher_path.exists():
-            error_msg = "BASE_MCP_LAUNCHER_MISSING"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-            raise Exception(error_msg)
-        with open(base_mcp_launcher_path, 'r') as f: mcp_launcher_template = json.load(f)
-        
-        if "mcpServers" in mcp_launcher_template and "playwright" in mcp_launcher_template["mcpServers"] and "args" in mcp_launcher_template["mcpServers"]["playwright"]:
-            args_list = mcp_launcher_template["mcpServers"]["playwright"]["args"]
-            try:
-                config_arg_index = args_list.index("--config")
-                if config_arg_index + 1 < len(args_list):
-                    args_list[config_arg_index + 1] = str(per_process_playwright_config_path.resolve())
-                else: raise ValueError("MCP Launcher template '--config' argument is last")
-            except ValueError as e_template_val:
-                error_msg = "MCP_LAUNCHER_TEMPLATE_CONFIG_ARG_ERROR"
-                result_data[PROCESSING_STATUS_COLUMN] = error_msg
-                raise Exception(f"{error_msg}: {e_template_val}")
-        else:
-            error_msg = "MCP_LAUNCHER_TEMPLATE_STRUCTURE_ERROR"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-            raise Exception(error_msg)
-
-        dynamic_mcp_launcher_path = tmp_profile_dir / "runtime-mcp-launcher.json"
-        with open(dynamic_mcp_launcher_path, 'w') as f: json.dump(mcp_launcher_template, f, indent=2)
-        
-        client_mcp = MCPClient.from_config_file(str(dynamic_mcp_launcher_path.resolve()))
-        agent = MCPAgent(llm=agent_llm_for_mcp, client=client_mcp, max_steps=30)
-
-        prompt = f"""
-Du bist ein Web-Agent mit Playwright-Werkzeugen.
-Die initial vermutete Webseite für "{company_name}" ist "{root_url_for_prompt}" (Quelle: {source_of_url}).
-
-Deine Aufgabe ist es, die folgenden Fakten über "{company_name}" zu finden und zu extrahieren.
-
-1.  **Überprüfung und Navigation:**
-    a. Öffne die initial vermutete URL: {root_url_for_prompt}
-    b. Überprüfe sorgfältig, ob diese Webseite tatsächlich die offizielle Webseite von "{company_name}" ist. Achte auf den Firmennamen, das Logo, und den Inhalt.
-    c. **Wenn die Seite NICHT die korrekte Webseite ist:**
-        i. Navigiere zu www.startpage.com.
-        ii. Suche nach "{company_name}".
-        iii. Analysiere die Suchergebnisse und identifiziere die wahrscheinlichste offizielle Webseite. Navigiere zu dieser Seite.
-        iv. Wenn du nach der Startpage-Suche immer noch keine passende Seite findest oder die Navigation fehlschlägt, verwende die ursprüngliche URL {root_url_for_prompt} als Basis für die Faktensuche oder setze Felder auf "null", falls dort nichts zu finden ist. Die "official_website" im JSON sollte dann {root_url_for_prompt} sein.
-    d. **Wenn die Seite die korrekte Webseite ist (oder du nach der Startpage-Suche auf der korrekten Seite gelandet bist):**
-        i. Die URL, auf der du dich befindest und von der du Daten extrahierst, ist die "official_website".
-        ii. Durchsuche diese Seite und relevante Unterseiten (z. B. /about, /unternehmen, /impressum, /geschichte, /contact, /legal) und sammle die unten genannten Fakten. Achte darauf, die aktuellsten Informationen zu finden.
-
-2.  **Fakten zu sammeln:**
-    • Gründungsjahr (JJJJ)
-    • Offizielle Website (die URL, die du in Schritt 1 als korrekt identifiziert und für die Datensammlung verwendet hast)
-    • Addresse Hauptsitz (vollständige Adresse, formatiert als: Strasse Hausnummer, PLZ Ort, Land. Beispiel: Musterstrasse 123, 8000 Zürich, Schweiz)
-    • Firmenidentifikationsnummer (meistens im Impressum, z.B. CHE-XXX.XXX.XXX)
-    • Haupt-Telefonnummer (internationales Format wenn möglich)
-    • Haupt-Emailadresse (allgemeine Kontakt-Email)
-    • URL oder PDF-Link des AKTUELLSTEN Geschäftsberichtes/Jahresberichtes (falls öffentlich zugänglich)
-    • Der auf der Webseite genannte Firmenname (z.B. aus dem Impressum oder der "Über uns" Seite). Dies sollte der reine Textname sein, keine URL.
-
-Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor oder danach.
-Der Wert für "official_website" MUSS die URL sein, von der du die Informationen letztendlich gesammelt hast.
-Wenn eine Information nicht gefunden werden kann, verwende "null" als Wert.
-{{
-  "official_website": "<URL der Webseite, von der die Daten tatsächlich gesammelt wurden>",
-  "founded": "<jahr JJJJ oder null>",
-  "Hauptsitz": "<vollständige Adresse oder null>",
-  "Firmenidentifikationsnummer": "<ID oder null>",
-  "HauptTelefonnummer": "<nummer oder null>",
-  "HauptEmailAdresse": "<email oder null>",
-  "Geschäftsbericht" : "<url/PDF-Link oder null>",
-  "extracted_company_name": "<reiner Text des auf Webseite gefundenen Firmennamens, keine URL, oder null>"
-}}"""
-
-        try:
-            agent_task = agent.run(prompt, max_steps=20)
-            agent_result_str = await asyncio.wait_for(agent_task, timeout=AGENT_PROCESSING_TIMEOUT)
-            agent_json_result = json.loads(agent_result_str)
-            
-            for key in EXPECTED_JSON_KEYS:
-                # official_website will be updated by the agent's response if provided,
-                # overwriting the initial root_url_for_prompt if the agent found a better URL.
-                result_data[key] = agent_json_result.get(key, "null")
-            # Agent ran successfully, update status to reflect this.
-            result_data[PROCESSING_STATUS_COLUMN] = f"{source_of_url} (AGENT_OK)"
-
-        except asyncio.TimeoutError:
-            error_msg = "AGENT_PROCESSING_TIMEOUT"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-        except json.JSONDecodeError:
-            error_msg = "AGENT_JSON_DECODE_ERROR"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-        except Exception as e_agent_run:
-            error_msg = f"AGENT_EXECUTION_ERROR: {str(e_agent_run)[:30]}"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg
-        
-    except Exception as e_outer:
-        # This catches errors from setup before agent.run or if agent.run itself fails non-specifically
-        # If status was already set to a specific error, don't overwrite with a generic one.
-        if "PENDING" in result_data[PROCESSING_STATUS_COLUMN] or result_data[PROCESSING_STATUS_COLUMN] == "OK" or "AGENT_OK" in result_data[PROCESSING_STATUS_COLUMN] or source_of_url in result_data[PROCESSING_STATUS_COLUMN]:
-            # Only overwrite if it's still a "good" or pending status
-            error_msg_outer = f"OUTER_PROCESSING_ERROR: {str(e_outer)[:30]}"
-            result_data[PROCESSING_STATUS_COLUMN] = error_msg_outer
-        print(f"[{os.getpid()}] Outer error processing company '{company_name}': {e_outer}. Final status: {result_data[PROCESSING_STATUS_COLUMN]}", file=sys.stderr)
-
-    finally:
-        if client_mcp:
-            if hasattr(client_mcp, 'stop_servers'):
-                try:
-                    await client_mcp.stop_servers()
-                except Exception as e_stop_servers:
-                    print(f"[{os.getpid()}] Error stopping MCPClient servers for '{company_name}': {e_stop_servers}", file=sys.stderr)
-        
-        if tmp_profile_dir and tmp_profile_dir.exists():
-            kill_chrome_processes_using(tmp_profile_dir)
-            time.sleep(0.5) # Give a moment for processes to release locks
-            rmtree_with_retry(tmp_profile_dir)
-            
-    return result_data
-
-def process_company_data_wrapper(company_name: str, company_number: str):
-    return asyncio.run(process_company_data(company_name, company_number))
+        result = asyncio.run(
+            core_processing.process_company_info(
+                company_name,
+                company_number,
+                config=shared_config_dict,
+                mcp_config_path_or_object=mcp_dynamic_params_dict
+            )
+        )
+        # Ensure company_name and company_number from input are in the result for consistency
+        result['company_name'] = company_name
+        result['company_number'] = company_number
+        worker_logger.info(f"Finished: {company_name} ({company_number}), Status: {result.get(PROCESSING_STATUS_COLUMN)}")
+        return result
+    except Exception as e:
+        worker_logger.error(f"Error processing {company_name} ({company_number}): {e}", exc_info=True)
+        error_result = {key: "null" for key in core_processing.EXPECTED_JSON_KEYS}
+        error_result["company_name"] = company_name
+        error_result["company_number"] = company_number
+        error_result["final_url"] = "null"
+        error_result["source_of_url"] = "null"
+        error_result[PROCESSING_STATUS_COLUMN] = f"POOL_WRAPPER_ERROR: {type(e).__name__}"
+        error_result["error_message"] = str(e)
+        return error_result
 
 def console_main() -> None:
-    parser = argparse.ArgumentParser(description="Parallel company data processor.")
+    log_file_name = os.getenv("LOG_FILE_BRAVE_PARALLEL", "brave_parallel_processing.log")
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    setup_logging(log_level=log_level, log_file=log_file_name)
+
+    parser = argparse.ArgumentParser(description="Parallel company data processor with resume capability.")
+    parser.add_argument("input_csv", help="Path to the input CSV file.")
     parser.add_argument("output_csv", help="Path to the output CSV file.")
     parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Number of worker processes.")
     args = parser.parse_args()
 
-    input_dir = "input"
-    list_of_csv_files = glob.glob(os.path.join(input_dir, '*.csv'))
-    if not list_of_csv_files: sys.exit(f"CRITICAL ERROR: No CSV files found in '{input_dir}'.")
-    input_csv_path = max(list_of_csv_files, key=os.path.getmtime)
-    print(f"Using newest input CSV: {input_csv_path}")
+    input_csv_path_obj = Path(args.input_csv)
+    if not input_csv_path_obj.is_file():
+        logger.critical(f"Input CSV file not found: {args.input_csv}")
+        sys.exit(1)
+    logger.info(f"Using input CSV: {args.input_csv}")
+    output_csv_path = Path(args.output_csv)
 
-    if not os.getenv("OPENAI_API_KEY"): sys.exit("CRITICAL ERROR: OPENAI_API_KEY not set.")
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    brave_api_key = os.getenv("BRAVE_API_KEY")
 
-    # Updated header
-    header = ['company_number', 'company_name'] + EXPECTED_JSON_KEYS + [PROCESSING_STATUS_COLUMN]
-    output_rows_buffer = [header]
-    companies_to_process_tuples = []
+    if not openai_api_key:
+        logger.critical("OPENAI_API_KEY not set in environment variables.")
+        sys.exit(1)
+    if not brave_api_key: # Changed from warning to info
+        logger.info("BRAVE_API_KEY not found. URL discovery will rely on other methods if available.")
 
+    main_shared_config = {
+        "OPENAI_API_KEY": openai_api_key,
+        "BRAVE_API_KEY": brave_api_key,
+        "URL_LLM_MODEL": os.getenv("URL_LLM_MODEL", "gpt-4.1-mini"),
+        "AGENT_LLM_MODEL": os.getenv("AGENT_LLM_MODEL", "gpt-4.1-mini"),
+        "LLM_RELEVANCE_CHECK_MODEL": os.getenv("LLM_RELEVANCE_CHECK_MODEL", "gpt-3.5-turbo"),
+        "AGENT_MAX_STEPS": int(os.getenv("AGENT_MAX_STEPS", 25)),
+        "AGENT_TIMEOUT": int(os.getenv("AGENT_TIMEOUT", 60)),
+    }
+    logger.debug(f"Main shared config for workers: {json.dumps(main_shared_config, indent=2)}")
+
+    headless_browsing = os.getenv("HEADLESS_BROWSING", "True").lower() == "true"
+    logger.info(f"Headless browsing mode for parallel workers: {headless_browsing}")
+
+    parallel_mcp_launcher_filename = "parallel_mcp_launcher.json"
+    parallel_mcp_launcher_path = Path(__file__).parent / parallel_mcp_launcher_filename
+
+    if not parallel_mcp_launcher_path.exists():
+        logger.warning(f"Base MCP launcher template '{parallel_mcp_launcher_path}' not found. Creating a dummy one.")
+        dummy_launcher_content = {
+            "mcpServers": {"playwright": {"executable": "echo", "args": ["dummy server for parallel_mcp_launcher"]}}
+        }
+        try:
+            with open(parallel_mcp_launcher_path, "w") as f:
+                json.dump(dummy_launcher_content, f, indent=2)
+            logger.info(f"Dummy '{parallel_mcp_launcher_path}' created.")
+        except IOError as e:
+            logger.critical(f"Could not create dummy '{parallel_mcp_launcher_path}': {e}. This file is required for dynamic MCP setup.", exc_info=True)
+            sys.exit(1)
+
+    mcp_dynamic_config_params = {
+        "base_mcp_launcher_path": str(parallel_mcp_launcher_path.resolve()),
+        "headless": headless_browsing,
+    }
+    logger.debug(f"MCP dynamic config params for workers: {json.dumps(mcp_dynamic_config_params, indent=2)}")
+
+    expected_header = ['company_number', 'company_name', 'final_url', 'source_of_url'] + \
+                      core_processing.EXPECTED_JSON_KEYS + \
+                      [PROCESSING_STATUS_COLUMN, 'error_message']
+
+    processed_company_numbers = set()
+    output_rows_buffer = [] # This will hold all rows to be written (old and new)
+    company_number_idx = 0 # Default, will be updated if header is found
+
+    if output_csv_path.is_file():
+        logger.info(f"Output file {output_csv_path} exists. Attempting to resume.")
+        try:
+            with open(output_csv_path, 'r', encoding='utf-8-sig', newline='') as outfile_read:
+                reader = csv.reader(outfile_read)
+                header_from_file = next(reader, None)
+                if header_from_file:
+                    if header_from_file == expected_header:
+                        logger.info("Existing output CSV header matches expected. Resuming.")
+                        output_rows_buffer.append(header_from_file)
+                        try:
+                            company_number_idx = header_from_file.index('company_number')
+                        except ValueError:
+                            logger.error("'company_number' not in matched header? Using index 0.")
+                            company_number_idx = 0
+
+                        for row in reader:
+                            if row:
+                                output_rows_buffer.append(row)
+                                if len(row) > company_number_idx and row[company_number_idx]:
+                                    processed_company_numbers.add(row[company_number_idx])
+                        logger.info(f"Loaded {len(processed_company_numbers)} already processed company numbers from existing output file.")
+                    else:
+                        logger.warning(f"Existing output CSV header does not match expected. Starting fresh output. "
+                                       f"Expected: {expected_header}, Found: {header_from_file}")
+                        output_rows_buffer.append(expected_header)
+                else:
+                    logger.info("Existing output CSV is empty or has no header. Starting with new header.")
+                    output_rows_buffer.append(expected_header)
+        except Exception as e:
+            logger.error(f"Error reading existing output file {output_csv_path}: {e}. Starting with new header.", exc_info=True)
+            output_rows_buffer = [expected_header]
+    else:
+        logger.info(f"Output file {output_csv_path} does not exist. Starting with new header.")
+        output_rows_buffer = [expected_header]
+
+    all_companies_from_input_tuples: List[Tuple[str, str]] = []
     try:
-        with open(input_csv_path, 'r', encoding='utf-8-sig') as infile:
+        with open(args.input_csv, 'r', encoding='utf-8-sig') as infile:
             reader = csv.reader(infile)
-            next(reader) # Skip input header
-            for i, row_data in enumerate(reader):
-                if len(row_data) < 2:
-                    error_entry = ["INVALID_INPUT_ROW"] * len(header)
-                    if len(row_data) > 0: error_entry[0] = row_data[0]
-                    error_entry[-1] = "INVALID_INPUT_CSV_ROW_STRUCTURE"
-                    output_rows_buffer.append(error_entry)
-                    continue
-                company_number, company_name = row_data[0].strip(), row_data[1].strip()
-                if not company_name:
-                    error_entry = [company_number, "EMPTY_COMPANY_NAME"] + ["null"] * len(EXPECTED_JSON_KEYS) + ["EMPTY_COMPANY_NAME_IN_INPUT"]
-                    output_rows_buffer.append(error_entry)
-                    continue
-                companies_to_process_tuples.append((company_name, company_number))
-    except Exception as e:
-        sys.exit(f"Error reading input CSV {input_csv_path}: {e}")
+            input_header = next(reader, None)
+            if not input_header or 'company_name' not in input_header or 'company_number' not in input_header:
+                logger.critical("Input CSV must contain 'company_name' and 'company_number' columns in the header.")
+                sys.exit(1)
 
-    total_companies_for_pool = len(companies_to_process_tuples)
+            input_company_name_idx = input_header.index('company_name')
+            input_company_number_idx = input_header.index('company_number')
+
+            for i, row_data in enumerate(reader):
+                if len(row_data) <= max(input_company_name_idx, input_company_number_idx):
+                    logger.warning(f"Skipping invalid row {i+2} in {args.input_csv}: not enough columns. Content: {row_data}")
+                    continue
+
+                company_number = row_data[input_company_number_idx].strip()
+                company_name = row_data[input_company_name_idx].strip()
+
+                if not company_name:
+                    logger.warning(f"Skipping row {i+2} in {args.input_csv} for company number '{company_number}': company name is empty.")
+                    continue
+                if not company_number:
+                    logger.warning(f"Skipping row {i+2} in {args.input_csv} for company name '{company_name}': company number is empty (required for resume).")
+                    continue
+                all_companies_from_input_tuples.append((company_name, company_number))
+    except FileNotFoundError:
+        logger.critical(f"Input CSV file not found at {args.input_csv}")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"Error reading input CSV {args.input_csv}: {e}", exc_info=True)
+        sys.exit(1)
+
+    logger.info(f"Found {len(all_companies_from_input_tuples)} total companies in input file.")
+
+    companies_for_pool_args_list = []
+    for name, number in all_companies_from_input_tuples:
+        if number in processed_company_numbers:
+            logger.info(f"Skipping already processed company: {name} ({number})")
+        else:
+            companies_for_pool_args_list.append((name, number, main_shared_config, mcp_dynamic_config_params))
+
+    total_companies_for_pool = len(companies_for_pool_args_list)
+    logger.info(f"Number of companies to process in this run (after filtering duplicates): {total_companies_for_pool}")
+
     if total_companies_for_pool > 0:
-        num_workers = min(args.workers, total_companies_for_pool)
-        print(f"Using {num_workers} worker processes for {total_companies_for_pool} valid companies.")
+        num_workers = min(args.workers, total_companies_for_pool, os.cpu_count())
+        logger.info(f"Using {num_workers} worker processes.")
         
-        with multiprocessing.Pool(processes=num_workers) as pool:
-            async_pool_results = pool.starmap_async(process_company_data_wrapper, companies_to_process_tuples)
-            try:
-                list_of_results_dicts = async_pool_results.get()
-                print("Parallel processing finished. Aggregating results.")
-                for i, extracted_info_dict in enumerate(list_of_results_dicts):
-                    original_company_name, original_company_number = companies_to_process_tuples[i]
-                    current_row_data = [original_company_number, original_company_name]
-                    for key in EXPECTED_JSON_KEYS:
-                        current_row_data.append(extracted_info_dict.get(key, "null"))
-                    current_row_data.append(extracted_info_dict.get(PROCESSING_STATUS_COLUMN, "STATUS_KEY_MISSING_FROM_RESULT")) # Add status
-                    output_rows_buffer.append(current_row_data)
-            except Exception as e_pool:
-                print(f"Error during multiprocessing pool execution: {e_pool}", file=sys.stderr)
-                for cn, cnum in companies_to_process_tuples: # Log error for all tasks submitted to pool
-                    error_row = [cnum, cn] + ["null"] * len(EXPECTED_JSON_KEYS) + [f"POOL_EXECUTION_ERROR: {str(e_pool)[:30]}"]
-                    output_rows_buffer.append(error_row)
-    
-    # Final write
-    print(f"\nWriting {len(output_rows_buffer)-1 if len(output_rows_buffer)>0 else 0} data entries to {args.output_csv}...")
+        start_time = time.time()
+        pool = multiprocessing.Pool(processes=num_workers)
+        try:
+            newly_processed_results_list = pool.starmap(run_company_processing_parallel_wrapper, companies_for_pool_args_list)
+
+            for result_dict in newly_processed_results_list:
+                # Ensure company_name and company_number are present, using original from input if necessary
+                # The wrapper should already add these back if they were lost.
+                row_company_number = result_dict.get("company_number", "UNKNOWN_NUMBER_FROM_POOL")
+                row_company_name = result_dict.get("company_name", "UNKNOWN_NAME_FROM_POOL")
+
+                current_row_data = [
+                    row_company_number,
+                    row_company_name,
+                    result_dict.get("final_url", "null"),
+                    result_dict.get("source_of_url", "null")
+                ]
+                for key in core_processing.EXPECTED_JSON_KEYS:
+                    current_row_data.append(result_dict.get(key, "null"))
+
+                current_row_data.append(result_dict.get(PROCESSING_STATUS_COLUMN, "STATUS_KEY_MISSING"))
+                current_row_data.append(result_dict.get("error_message", None))
+                output_rows_buffer.append(current_row_data)
+
+        except Exception as e_pool:
+            logger.critical(f"Error during multiprocessing pool execution: {e_pool}", exc_info=True)
+            # No specific error rows added here as individual task errors are handled by wrapper.
+            # This would be for catastrophic pool failures.
+        finally:
+            logger.debug("Closing multiprocessing pool.")
+            pool.close()
+            pool.join()
+
+        end_time = time.time()
+        logger.info(f"Parallel processing of {total_companies_for_pool} companies finished in {end_time - start_time:.2f} seconds.")
+    else:
+        logger.info("No new companies to process in this run.")
+
+    logger.info(f"Writing {len(output_rows_buffer)-1} total data entries to {args.output_csv}...")
     try:
         with open(args.output_csv, 'w', newline='', encoding='utf-8') as outfile:
             writer = csv.writer(outfile)
             writer.writerows(output_rows_buffer)
-        print(f"Successfully wrote to {args.output_csv}")
+        logger.info(f"Successfully wrote to {args.output_csv}")
     except IOError as e:
-        print(f"Error writing to output CSV {args.output_csv}: {e}", file=sys.stderr)
+        logger.error(f"Error writing to output CSV {args.output_csv}: {e}", exc_info=True)
     
-    print("\nProcessing complete.")
+    logger.info("Processing complete.")
 
 if __name__ == "__main__":
     try:
         multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass # If already set or not applicable
+    except RuntimeError as e:
+        current_context = multiprocessing.get_start_method(allow_none=True)
+        if current_context != 'spawn':
+            logger.warning(f"Could not force multiprocessing start_method to 'spawn' (current: {current_context}): {e}. Proceeding...")
+        else:
+            pass # Already spawn
+
     console_main()
+    logging.shutdown()
