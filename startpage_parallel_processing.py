@@ -26,7 +26,7 @@ load_dotenv()
 # search_common imports removed as they are related to the old search method.
 # For this Startpage-based version, these specific functions are not needed.
 
-AGENT_PROCESSING_TIMEOUT = 50  # 35 seconds
+AGENT_PROCESSING_TIMEOUT = 120  # 35 seconds
 EXPECTED_JSON_KEYS = [ # These are the data fields the agent is expected to return
     "official_website", "founded", "Hauptsitz", "Firmenidentifikationsnummer",
     "HauptTelefonnummer", "HauptEmailAdresse", "Geschäftsbericht", "extracted_company_name"
