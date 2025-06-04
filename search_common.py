@@ -1,16 +1,21 @@
 import httpx
 import json
-import sys # Moved from the bottom
-import re # Added for is_url_relevant_to_company
-from urllib.parse import urlparse
+import sys
+import re
+from urllib.parse import urlparse # urlunparse might be needed if you add more advanced normalization
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 
-# --- Constants for Brave/Wikidata search ---
+# --- Constants for Search APIs ---
+# Brave
 SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+# Wikidata
 WIKIDATA_SEARCH = "https://www.wikidata.org/w/api.php"
 WIKIDATA_ENTITY = "https://www.wikidata.org/w/api.php"
-BLACKLIST = {"wikipedia.org", "facebook.com", "twitter.com", "linkedin.com", "pflegeheimvergleich.ch"} # Domains to ignore
+# Google
+Google_Search_API_URL = "https://www.googleapis.com/customsearch/v1" # ADDED for Google
+
+BLACKLIST = {"wikipedia.org", "facebook.com", "twitter.com", "linkedin.com", "pflegeheimvergleich.ch", "moneyhouse.ch"} # Domains to ignore
 
 def select_best_url_with_llm(company_name: str, search_results: List[Dict[str, Any]], llm: ChatOpenAI) -> str | None:
     """
@@ -25,7 +30,8 @@ def select_best_url_with_llm(company_name: str, search_results: List[Dict[str, A
         formatted_results.append(
             f"{i+1}. URL: {result.get('url', 'N/A')}\n"
             f"   Title: {result.get('title', 'N/A')}\n"
-            f"   Description: {result.get('description', 'N/A')}"
+            # Google calls snippet 'snippet', Brave calls it 'description'. Standardize to 'description' for the prompt.
+            f"   Description: {result.get('description') or result.get('snippet', 'N/A')}"
         )
 
     prompt_text = f"""
@@ -77,7 +83,101 @@ Which number corresponds to the most likely official homepage? Respond with the 
         print(f"Error during LLM call for URL selection: {e}", file=sys.stderr)
         return None
 
+# --- Google Search Function ---
+async def get_Google_Search_candidates(
+    company_name: str,
+    api_key: str,
+    cx: str,
+    count: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Fetches potential candidate URLs from Google Custom Search API.
+    Processes them to a format similar to get_brave_search_candidates.
+    Returns a list of dictionaries, where each dictionary contains 'url', 'title', 'description' (from 'snippet'),
+    'is_ch_domain', and 'company_match_in_host'.
+    """
+    if not api_key or not cx:
+        print("Error: Google API Key or CX not provided. Skipping Google Search.", file=sys.stderr)
+        return []
 
+    params = {
+        "key": api_key,
+        "cx": cx,
+        "q": f'"{company_name}" offizielle homepage', # Using a similar query structure to Brave
+        "num": min(count, 10),  # API allows up to 10 results per page
+        "lr": "lang_de", # Restrict to German language pages
+        "cr": "countryCH" # Restrict to Switzerland
+    }
+    # print(f"Querying Google Custom Search for: '{params['q']}' with country CH, lang DE")
+
+    candidate_results = []
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(Google_Search_API_URL, params=params, timeout=10.0)
+            response.raise_for_status()
+            search_data = response.json()
+
+        if "items" in search_data:
+            for item in search_data["items"]:
+                url = item.get("link")
+                title = item.get("title")
+                # Google uses "snippet" for description
+                description_or_snippet = item.get("snippet")
+
+                if not url:
+                    continue
+
+                parsed_url = urlparse(url)
+                host = parsed_url.hostname or ""
+
+                if not host:
+                    continue
+
+                if any(domain_part in host for domain_part in BLACKLIST):
+                    # print(f"Skipping blacklisted URL (Google): {url}")
+                    continue
+
+                # Replicate heuristic logic from Brave for consistency
+                company_main_name_part = company_name.lower().split(" ")[0].replace(",", "").replace(".", "")
+                company_name_no_spaces = company_name.lower().replace(" ", "").replace(".", "").replace(",", "")
+                host_cleaned = host.lower()
+                # title_cleaned = title.lower() if title else "" # Not used in Brave's final append, so mirror that
+
+                is_ch = host.endswith(".ch")
+                company_match = (company_main_name_part in host_cleaned) or \
+                                (company_name_no_spaces in host_cleaned) or \
+                                (host_cleaned.startswith(company_main_name_part)) or \
+                                (host_cleaned.startswith(company_name_no_spaces))
+
+                candidate_results.append({
+                    "url": url,
+                    "title": title,
+                    "description": description_or_snippet, # Standardize to 'description' key for LLM prompt
+                    "is_ch_domain": is_ch,
+                    "company_match_in_host": company_match,
+                    "raw_google_item": item # Optional: for debugging or more complex heuristics
+                })
+
+        # Sort candidates similar to Brave's logic for heuristic fallback consistency
+        candidate_results.sort(key=lambda x: (
+            not x["is_ch_domain"],
+            not x["company_match_in_host"]
+        ))
+        print(f"Found {len(candidate_results)} potential candidates for '{company_name}' from Google Search.")
+        return candidate_results
+
+    except httpx.RequestError as e:
+        print(f"Google Search API request error: {e}", file=sys.stderr)
+    except httpx.HTTPStatusError as e:
+        print(f"Google Search API returned an error: {e.response.status_code} - {e.response.text}", file=sys.stderr)
+    except json.JSONDecodeError:
+        print("Google Search API response was not valid JSON.", file=sys.stderr)
+    except Exception as e:
+        print(f"An unexpected error occurred in get_Google Search_candidates: {e}", file=sys.stderr)
+    return []
+
+
+# --- Brave Search Function (kept for reference or potential future use) ---
 def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5) -> List[Dict[str, Any]]:
     """
     Fetches potential candidate URLs from Brave Search API.
@@ -102,6 +202,9 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
     candidate_results = []
     try:
         print(f"Querying Brave Search for: '{params['q']}' with country '{params['country']}'")
+        # Note: For async operation, this should use an async client as well.
+        # For now, keeping it synchronous as per original structure.
+        # If your main script always awaits this, convert it to async.
         resp = httpx.get(SEARCH_URL, headers=headers, params=params, timeout=10.0)
         resp.raise_for_status()
         results_json = resp.json().get("web", {}).get("results", [])
@@ -128,17 +231,11 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
             company_main_name_part = company.lower().split(" ")[0].replace(",", "").replace(".", "")
             company_name_no_spaces = company.lower().replace(" ", "").replace(".", "").replace(",", "")
             host_cleaned = host.lower()
-            title_cleaned = title.lower() if title else ""
+            # title_cleaned = title.lower() if title else "" # Not used in final append, matching structure.
             
-            pre_filter_match = (
-                company_main_name_part in host_cleaned or
-                company_name_no_spaces in host_cleaned or
-                company_main_name_part in title_cleaned or
-                company_name_no_spaces in title_cleaned or
-                host_cleaned.startswith(company_main_name_part) or
-                host_cleaned.startswith(company_name_no_spaces)
-            )
-            
+            # Removed 'pre_filter_match' as it wasn't directly used for filtering here,
+            # the results are appended and then sorted. The match logic is in 'company_match_in_host'.
+
             candidate_results.append({
                 "url": url,
                 "title": title,
@@ -180,6 +277,7 @@ def get_wikidata_homepage(company: str) -> str | None:
     }
     try:
         # print(f"Querying Wikidata entities for: '{company}'") # For debugging
+        # Note: For async operation, this should use an async client.
         r_search = httpx.get(WIKIDATA_SEARCH, params=params_search, timeout=5.0)
         r_search.raise_for_status()
         search_results_json = r_search.json()
@@ -193,20 +291,21 @@ def get_wikidata_homepage(company: str) -> str | None:
         # Try to find a good QID match
         for res in search_results:
             res_label = res.get("label", "").lower()
-            res_aliases = [alias.get("value", "").lower() for alias in res.get("aliases", []) if alias.get("value")]
+            # Wikidata aliases are a list of dicts, each with 'language' and 'value'
+            res_aliases = [alias.get("value", "").lower() for alias_obj in res.get("aliases", []) for alias in alias_obj if isinstance(alias_obj, dict) and alias_obj.get("language") == "de" and alias_obj.get("value")]
             
             if company.lower() == res_label or company.lower() in res_aliases:
                 qid = res.get("id")
                 break
         
-        if not qid:
+        if not qid: # Fallback: if company name is IN the label (broader match)
             for res in search_results:
                 res_label = res.get("label", "").lower()
                 if company.lower() in res_label: 
                     qid = res.get("id")
                     break
         
-        if not qid and search_results: 
+        if not qid and search_results: # Fallback: first result with a description, or just first result
             first_with_desc = next((res.get("id") for res in search_results if res.get("description")), None)
             if first_with_desc:
                 qid = first_with_desc
@@ -230,14 +329,32 @@ def get_wikidata_homepage(company: str) -> str | None:
         if not claims_data:
             return None
 
-        mainsnak = claims_data[0].get("mainsnak")
-        if mainsnak and mainsnak.get("datavalue") and isinstance(mainsnak["datavalue"].get("value"), str):
-            url = mainsnak["datavalue"]["value"]
-            if url.startswith("http://") or url.startswith("https://"):
-                parsed_url = urlparse(url)
-                if parsed_url.hostname and not any(domain in parsed_url.hostname for domain in BLACKLIST):
-                    print(f"Wikidata found URL: {url} for {company} (QID: {qid})")
-                    return url
+        # Iterate through claims to find a non-deprecated, preferred rank or normal rank URL
+        preferred_url = None
+        normal_url = None
+
+        for claim in claims_data:
+            if claim.get("rank") == "deprecated":
+                continue
+            
+            mainsnak = claim.get("mainsnak")
+            if mainsnak and mainsnak.get("datavalue") and isinstance(mainsnak["datavalue"].get("value"), str):
+                current_url = mainsnak["datavalue"]["value"]
+                if current_url.startswith("http://") or current_url.startswith("https://"):
+                    parsed_url = urlparse(current_url)
+                    if parsed_url.hostname and not any(domain in parsed_url.hostname for domain in BLACKLIST):
+                        if claim.get("rank") == "preferred":
+                            preferred_url = current_url
+                            break # Found preferred, use this
+                        if not normal_url: # Store first normal rank URL
+                             normal_url = current_url
+        
+        url_to_return = preferred_url or normal_url # Prioritize preferred
+
+        if url_to_return:
+            print(f"Wikidata found URL: {url_to_return} for {company} (QID: {qid})")
+            return url_to_return
+            
     except httpx.RequestError as e:
         print(f"Wikidata API request error: {e}", file=sys.stderr)
     except httpx.HTTPStatusError as e:
@@ -248,18 +365,20 @@ def get_wikidata_homepage(company: str) -> str | None:
         print(f"An unexpected error occurred in get_wikidata_homepage for {company}: {e}", file=sys.stderr)
     return None
 
+# This function is designed to be called by the main script before handing off to the agent.
+# It's already async.
 async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.AsyncClient) -> bool:
     """
     Performs a pre-check to see if the URL seems relevant to the company name
     by fetching the page title and checking against the domain.
     """
-    if not url or url == "null":
-        # If no URL, it's "relevant" in the sense that we don't block processing based on this check.
-        # The agent will then receive "null" and should handle it.
-        return True
+    if not url or url == "null" or not url.startswith(('http://', 'https://')): # Added check for valid URL start
+        # If no valid URL, it's "relevant" in the sense that we don't block processing based on this check.
+        # The agent will then receive "null" or the invalid URL and should handle it.
+        return True # Or False, depending on desired behavior for bad URLs. True lets agent handle it.
 
     try:
-        # print(f"Pre-check: Fetching {url} for title...") # Keep print in main processor for clarity
+        # print(f"Pre-check: Fetching {url} for title...")
         response = await client.get(url, follow_redirects=True, timeout=10.0)
         response.raise_for_status()
         html_content = response.text
@@ -275,37 +394,43 @@ async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.
 
         company_name_parts = [part for part in normalized_company_name.split() if len(part) > 2]
         if not company_name_parts: # Handle cases like "AG" or very short names
-             company_name_parts = [normalized_company_name]
+                 company_name_parts = [normalized_company_name] if normalized_company_name else []
+
 
         title_match_found = any(part in normalized_page_title for part in company_name_parts)
-        # Check if company name parts are in the domain, excluding common TLDs or subdomains like 'www'
-        # This is a simple check; more sophisticated checks might be needed for complex domain structures.
         domain_for_check = domain.replace("www.", "")
         domain_match_found = any(part in domain_for_check for part in company_name_parts)
         
-        # Prioritize title match if title is specific
-        if page_title and not any(generic in normalized_page_title for generic in ["home", "startseite", "accueil", "benvenuto", "willkommen"]):
+        # If title is specific and matches, it's relevant
+        if page_title and not any(generic in normalized_page_title for generic in ["home", "startseite", "accueil", "benvenuto", "willkommen", "homepage", "website", "site officiel"]):
             if title_match_found:
-                # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (title match).")
+                # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (specific title match).")
                 return True
         
-        # Domain match is also a strong indicator
+        # If domain matches, it's relevant
         if domain_match_found:
             # print(f"Relevance pre-check for '{company_name}' at '{url}': Domain='{domain}'. Seems relevant (domain match).")
             return True
         
+        # If title is generic but still matches, it's also relevant (e.g. "Company Name - Home")
+        if title_match_found:
+            # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (generic title match).")
+            return True
+
         # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}', Domain='{domain}'. Potential mismatch.")
         return False
 
-    except httpx.TimeoutException:
-        # print(f"Timeout fetching URL {url} for relevance pre-check.", file=sys.stderr)
-        return True # Treat timeout as potential mismatch, but let agent try
-    except httpx.RequestError: # Catching general request error
-        # print(f"Error fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
-        return True # Treat as potential mismatch, but let agent try
-    except httpx.HTTPStatusError: # Catching HTTP status errors
-        # print(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check.", file=sys.stderr)
-        return True # Treat as potential mismatch, but let agent try
-    except Exception: # Catching any other unexpected errors
-        # print(f"Unexpected error during relevance pre-check for {url}: {e}", file=sys.stderr)
-        return True # Treat as potential mismatch, but let agent try
+    except httpx.TimeoutException as e:
+        print(f"Timeout fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
+        return True # Treat timeout as potentially relevant to let agent decide
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check: {e.status_code}", file=sys.stderr)
+        if e.response.status_code in [403, 404, 500, 502, 503, 504]: # Definite issues
+            return False
+        return True # Other HTTP errors, let agent try
+    except httpx.RequestError as e: 
+        print(f"Request error fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
+        return False # Likely network issue or bad URL, consider not relevant
+    except Exception as e: 
+        print(f"Unexpected error during relevance pre-check for {url}: {e}", file=sys.stderr)
+        return True # Unknown error, let agent try
