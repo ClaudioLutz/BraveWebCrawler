@@ -33,9 +33,8 @@ async def main(company_name):
     if openai_api_key_local:
         try:
             llm_url_selector = ChatOpenAI(
-                model="gpt-4.1-mini", 
-                temperature=0,
-                api_key=openai_api_key_local
+                model="gpt-4.1-mini",
+                temperature=0
             )
             print("LLM for URL selection initialized.")
         except Exception as e:
@@ -120,9 +119,8 @@ async def main(company_name):
     if openai_api_key_local: 
         try:
             agent_llm = ChatOpenAI(
-                model="gpt-4.1-mini", 
-                temperature=0,
-                api_key=openai_api_key_local
+                model="gpt-4.1-mini",
+                temperature=0
             )
             print("LLM for MCPAgent initialized.")
         except Exception as e:
