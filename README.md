@@ -95,7 +95,7 @@ BRAVE_API_KEY=your_brave_api_key_here
 
 # Google Custom Search API Key & CX ID (required for Google Search based scripts)
 GOOGLE_API_KEY=your_google_api_key_here
-GOOGLE_CX=your_google_custom_search_engine_id
+GOOGLE_CX=your_google_custom_search_engine_id # Note: This was previously GOOGLE_CX_ID in some older internal versions.
 ```
 
 ### 5. Install Playwright MCP Server and Browsers
@@ -154,9 +154,12 @@ All scripts read input from the `input/` directory (automatically finding the ne
       ```
    *   **Parallel Batch Processing:** (Sequential Google script not typically used, parallel is preferred)
       ```bash
+      # Default (headless mode)
       python BraveWebCrawler/google_parallel_processing.py path/to/your_output_google_parallel.csv --workers 4
+      # Headful mode
+      python BraveWebCrawler/google_parallel_processing.py path/to/your_output_google_parallel.csv --workers 4 --headful
       ```
-      (This script runs browsers in headless mode by default.)
+      (This script runs browsers in headless mode by default. Use `--headful` to see browser windows.)
 
 **3. Startpage Agent Based Script:**
    *   **Parallel Batch Processing:**
@@ -177,14 +180,20 @@ CH-020.3.000.002-8,Test Corp
 The output CSV will include the input columns plus the extracted data fields and a `processing_status` column.
 Expected data fields: `official_website`, `founded`, `Hauptsitz`, `Firmenidentifikationsnummer`, `HauptTelefonnummer`, `HauptEmailAdresse`, `Geschäftsbericht`, `extracted_company_name`.
 
-Example `processing_status` values:
-- `Brave Search + LLM (AGENT_OK)`
-- `Google Search API (AGENT_OK)`
-- `Startpage Agent (AGENT_OK)`
-- `NO_URL_FOUND`
-- `PRE_CHECK_URL_MISMATCH` (for API-based searches)
-- `AGENT_PROCESSING_TIMEOUT`
-- `AGENT_JSON_DECODE_ERROR`
+Example `processing_status` values for `google_parallel_processing.py`:
+- `Google Search API (AGENT_OK)`: Successful extraction using a URL from Google Search.
+- `Google Search_NO_CANDIDATES_FOUND`: Google Search found no URLs for the company.
+- `Google Search_LLM_NO_URL_SELECTED`: Google Search found URLs, but the LLM didn't select one as suitable.
+- `AGENT_TIMEOUT_WITH_GOOGLE_URL (Google Search API)`: Agent timed out while processing the Google-provided URL.
+- `AGENT_URL_NOT_CONFIRMED_OR_DATA_NULL (Google Search API)`: Agent processed the URL but couldn't confirm it or found no data.
+- `AGENT_JSON_ERROR_WITH_GOOGLE_URL (Google Search API)`: Agent returned malformed JSON.
+- `Google Search_ERROR: ...`: An error occurred during the Google Search API call.
+(Other scripts like `brave_parallel_processing.py` will have different source prefixes like `Brave Search + LLM (...)` or `Startpage Agent (...)`.)
+Common general statuses include:
+- `NO_URL_FOUND` (if no strategy yields a URL)
+- `AGENT_PROCESSING_TIMEOUT` (general timeout)
+- `TEMP_DIR_CREATION_ERROR`
+- `POOL_EXECUTION_ERROR`
 
 ## How It Works (Simplified)
 

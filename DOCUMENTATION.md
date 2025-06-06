@@ -34,8 +34,10 @@
 
 This document provides detailed technical information about the Company Data Extraction Agent, a suite of Python scripts designed to find official company websites and extract key information. The system supports multiple strategies for URL discovery, including:
 
-1.  **Brave Search API:** Primary method, with Wikidata as a fallback.
-2.  **Google Custom Search API:** Primary method, with Wikidata as a fallback.
+1.  **Brave Search API:** Primary method, with Wikidata as a fallback (used in `brave_search.py` and `brave_processor.py`).
+2.  **Google Custom Search API:**
+    *   For `google_search.py` (single company): Primary method, with Wikidata as a fallback.
+    *   For `google_parallel_processing.py`: Uses Google Search API, an LLM selects the best URL, and this URL is passed to the agent. This script does not directly implement a Wikidata fallback if the Google Search + LLM selection yields no URL; the agent is only tasked if a URL is found.
 3.  **Agent-driven Startpage.com Search:** The agent itself performs a search on Startpage.com to find the company website.
 
 Once a potential URL is identified (or if the agent is tasked to find one), an MCP (Model Context Protocol) enabled agent using Playwright and a Large Language Model (LLM) like OpenAI's GPT attempts to navigate the website and extract predefined data points. The system offers scripts for single company processing, sequential batch processing, and parallel batch processing for each search strategy.
@@ -71,16 +73,18 @@ flowchart TD
     K0[Load API Keys] --> K1["URL Discovery via API (e.g., Brave/Google)"]
     K1 --> K1a{URL Candidates?}
     K1a -- Yes --> K1b[LLM Selects Best URL]
-    K1a -- No --> K1c[Fallback to Wikidata]
+    K1a -- Yes --> K1b[LLM Selects Best URL]
+    K1a -- No --> K1x[Set status: API_NO_CANDIDATES_FOUND]
     K1b --> K1d{URL Selected by LLM?}
     K1d -- Yes --> K1e[Set URL & Source]
-    K1d -- No --> K1c
-    K1c --> K1e
+    K1d -- No --> K1y[Set status: API_LLM_NO_URL_SELECTED]
+    K1x --> K4c["Clean up temp files (for parallel)"]
+    K1y --> K4c
     K1e --> K1f{URL Found?}
-    K1f -- No --> K4[Set status: NO_URL_FOUND]
-    K1f -- Yes --> K1g[URL Relevance Pre-check]
-    K1g -- Relevant --> K2["Set up MCP Client & Agent (with temp profile for parallel)"]
-    K1g -- Not Relevant --> K4b[Set status: PRE_CHECK_URL_MISMATCH]
+    K1f -- No --> K4[Set status: NO_URL_FOUND_INTERNAL_ERROR] # Should ideally not happen if K1e is reached
+    K1f -- Yes --> K1g[URL Relevance Pre-check (not in google_parallel_processing.py, agent handles relevance)]
+    K1g -- Relevant (or check skipped) --> K2["Set up MCP Client & Agent (with temp profile for parallel)"]
+    K1g -- Not Relevant (if check performed) --> K4b[Set status: PRE_CHECK_URL_MISMATCH]
     K2 --> K3["Run agent to scrape details (timeout applies)"]
     K3 -- Success --> K3a[Set status: AGENT_OK / Source + AGENT_OK]
     K3 -- Timeout/Error --> K3b[Set status: AGENT_ERROR/TIMEOUT etc.]
@@ -123,8 +127,8 @@ The project includes several primary scripts, categorized by their URL discovery
     *   `brave_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`, with Brave Search API/Wikidata for URL discovery. Features isolated browser profiles and dynamic MCP configurations per worker.
 
 **2. Google Search Based:**
-    *   `google_search.py`: CLI script for a single company using Google Custom Search API, then Wikidata.
-    *   `google_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`, with Google Custom Search API for URL discovery. Also uses isolated profiles and dynamic MCP configs. The agent in this script is typically given a pre-selected URL to process. Headless mode is enabled by default (`--headless=new`).
+    *   `google_search.py`: CLI script for a single company using Google Custom Search API, then Wikidata as a fallback.
+    *   `google_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`. It uses the Google Custom Search API to find URL candidates, and an LLM selects the best URL. This selected URL is then passed to the agent for data extraction. If no URL is selected via Google Search, the agent step is skipped for that company. This script features isolated browser profiles and dynamic MCP configurations per worker. Headless mode is enabled by default (`--headless=new`), but can be run in headful mode using the `--headful` argument. It does not directly implement a Wikidata fallback.
 
 **3. Startpage Agent Based:**
     *   `startpage_parallel_processing.py`: Processes companies from a CSV in parallel. Unlike other scripts, this one tasks the agent to directly use Startpage.com to find the company URL and then extract data. It does not use Brave/Google/Wikidata APIs for initial URL discovery.
@@ -145,7 +149,7 @@ The project includes several primary scripts, categorized by their URL discovery
     OPENAI_API_KEY=sk-...
     BRAVE_API_KEY=BSA...        # For Brave Search scripts
     GOOGLE_API_KEY=AIza...      # For Google Search scripts
-    GOOGLE_CX=your_cx_id        # For Google Search scripts (Custom Search Engine ID)
+    GOOGLE_CX=your_google_custom_search_engine_id # For Google Search scripts (Custom Search Engine ID)
     ```
 
 *   **LLM Initialization**:
@@ -168,14 +172,28 @@ The project includes several primary scripts, categorized by their URL discovery
 
 *   **Agent Prompts**:
     Each script tailors the prompt for the agent. Key variations:
-    *   **API-based scripts (Brave/Google single/parallel):** The prompt usually provides an already identified `root_url_for_prompt` and asks the agent to verify and extract data from it. Some parallel versions include instructions for the agent to use Startpage as a fallback if the provided URL is bad.
+    *   **API-based scripts (Brave single/parallel, Google single):** The prompt usually provides an already identified `root_url_for_prompt` (from API search + LLM selection/Wikidata) and asks the agent to verify and extract data from it. Some parallel versions (like `brave_parallel_processing.py`) might include instructions for the agent to use Startpage as a fallback if the provided URL is bad.
+    *   **`google_parallel_processing.py`:** The prompt provides the `company_url_from_google` (obtained from Google Search API + LLM selection) and instructs the agent to navigate directly to this URL, verify its relevance, and extract data. It explicitly tells the agent *not* to search for another URL if the provided one is problematic.
     *   **`startpage_parallel_processing.py`:** The prompt instructs the agent to go to Startpage.com, search for the company, identify the official website, and then extract data.
     *   All prompts request data in a specific JSON format.
 
 *   **Output CSV**:
     All batch processing scripts generate a CSV file with columns for `company_number`, `company_name`, the `EXPECTED_JSON_KEYS`, and a `PROCESSING_STATUS_COLUMN`.
     *   `EXPECTED_JSON_KEYS`: `official_website`, `founded`, `Hauptsitz`, `Firmenidentifikationsnummer`, `HauptTelefonnummer`, `HauptEmailAdresse`, `Geschäftsbericht`, `extracted_company_name`.
-    *   `PROCESSING_STATUS_COLUMN`: Provides detailed status of processing for each company (e.g., `Brave Search + LLM (AGENT_OK)`, `NO_URL_FOUND`, `PRE_CHECK_URL_MISMATCH`, `AGENT_PROCESSING_TIMEOUT`, `Google Search_LLM_NO_URL_SELECTED`, `Startpage Agent (AGENT_NO_URL_FOUND)`).
+    *   `PROCESSING_STATUS_COLUMN`: Provides detailed status of processing for each company. Examples include:
+        *   `Brave Search + LLM (AGENT_OK)`
+        *   `Google Search API (AGENT_OK)` (for `google_parallel_processing.py` when successful)
+        *   `Startpage Agent (AGENT_OK)`
+        *   `NO_URL_FOUND` (general)
+        *   `Google Search_NO_CANDIDATES_FOUND`
+        *   `Google Search_LLM_NO_URL_SELECTED`
+        *   `Google Search_ERROR: ...`
+        *   `AGENT_TIMEOUT_WITH_GOOGLE_URL (Google Search API)`
+        *   `AGENT_JSON_ERROR_WITH_GOOGLE_URL (Google Search API)`
+        *   `AGENT_URL_NOT_CONFIRMED_OR_DATA_NULL (Google Search API)`
+        *   `PRE_CHECK_URL_MISMATCH` (primarily for Brave scripts)
+        *   `AGENT_PROCESSING_TIMEOUT` (general)
+        *   Many other specific error/status codes (e.g., `TEMP_DIR_CREATION_ERROR`, `AGENT_OPENAI_KEY_MISSING`).
 
 *   **Timeout**:
     Agent processing for each company is subject to a timeout, typically `AGENT_PROCESSING_TIMEOUT = 120` seconds in batch scripts.
@@ -185,7 +203,8 @@ The project includes several primary scripts, categorized by their URL discovery
     *   They create temporary, isolated Playwright user data directories for each worker process to prevent interference.
     *   Dynamic MCP launcher configurations are generated per worker.
     *   Window positioning for non-headless browsers is often calculated based on worker PID to stagger windows.
-    *   `google_parallel_processing.py` defaults to headless mode (`headless: True`, using `--headless=new`). `brave_parallel_processing.py` and `startpage_parallel_processing.py` typically run with `headless: False`.
+    *   `google_parallel_processing.py` defaults to headless mode (`headless: True`, using `--headless=new`). It can be run in headful mode using the `--headful` command-line argument.
+    *   `brave_parallel_processing.py` and `startpage_parallel_processing.py` typically run with `headless: False` (i.e., headful by default, but this can also be controlled by their respective `--headless` flags if implemented, or lack thereof means headful).
     *   Robust cleanup mechanisms (`rmtree_with_retry`, `kill_chrome_processes_using`) are implemented.
 
 ### Usage Examples
@@ -209,8 +228,9 @@ The project includes several primary scripts, categorized by their URL discovery
     python BraveWebCrawler/brave_parallel_processing.py output_brave_parallel.csv --workers 4
     ```
 *   **Parallel Batch Processing (Google Search):**
-    ```bash
     python BraveWebCrawler/google_parallel_processing.py output_google_parallel.csv --workers 4
+    # To run in headful mode:
+    python BraveWebCrawler/google_parallel_processing.py output_google_parallel.csv --workers 4 --headful
     ```
 *   **Parallel Batch Processing (Startpage Agent Search):**
     ```bash
@@ -281,8 +301,10 @@ The project uses different MCP launcher configurations:
           "browser": {
             "userDataDir": "C:\\path\\to\\temp\\mcp_playwright_profile_PID_TIMESTAMP",
             "launchOptions": {
-              "headless": true,
+              "headless": true, // Default for google_parallel_processing.py
               "args": ["--headless=new"]
+              // If --headful is used, this would be "headless": false,
+              // and "args" would include window position/size.
             }
           }
         }
