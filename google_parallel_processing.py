@@ -78,7 +78,7 @@ def kill_chrome_processes_using(path: Path):
 
 Logger.set_debug(1)
 
-async def process_company_data(company_name: str, company_number: str) -> Dict[str, Any]:
+async def process_company_data(company_name: str, company_number: str, headful_mode: bool = False) -> Dict[str, Any]: # Added headful_mode
     result_data = {key: "null" for key in EXPECTED_JSON_KEYS}
     result_data[PROCESSING_STATUS_COLUMN] = "PENDING_URL_ACQUISITION" # New initial status
     tmp_profile_dir = None
@@ -170,19 +170,23 @@ async def process_company_data(company_name: str, company_number: str) -> Dict[s
         x_pos = col_index * (base_window_width + x_padding)
         y_pos = row_index * (base_window_height + y_padding)
 
+        launch_options = {
+            "headless": not headful_mode,
+            "args": []
+        }
+        if headful_mode:
+            launch_options["args"].extend([
+                f"--window-position={x_pos},{y_pos}",
+                f"--window-size={base_window_width},{base_window_height}"
+            ])
+        else:
+            launch_options["args"].append("--headless=new")
+            # Potentially other headless-specific args could go here
+
         playwright_config_content = {
             "browser": {
                 "userDataDir": str(tmp_profile_dir.resolve()),
-                "launchOptions": {
-                    "headless": True,
-                    "args": [
-                        # "--disable-breakpad",
-                        # "--disable-extensions",
-                        "--headless=new" ,
-                        # f"--window-position={x_pos},{y_pos}",
-                        # f"--window-size={base_window_width},{base_window_height}"
-                    ]
-                }
+                "launchOptions": launch_options
             }
         }
         per_process_playwright_config_path = tmp_profile_dir / "runtime-playwright-config.json"
@@ -315,8 +319,8 @@ Antworte **ausschließlich** mit genau diesem JSON, ohne jeglichen Text davor od
             
     return result_data
 
-def process_company_data_wrapper(company_name: str, company_number: str):
-    return asyncio.run(process_company_data(company_name, company_number))
+def process_company_data_wrapper(company_name: str, company_number: str, headful_mode: bool): # Added headful_mode
+    return asyncio.run(process_company_data(company_name, company_number, headful_mode=headful_mode)) # Pass headful_mode
 
 def console_main() -> None:
     # Explicitly load .env file from the script's directory or CWD
@@ -336,15 +340,10 @@ def console_main() -> None:
         print(f"Warning: .env file not found at {dotenv_path_script_dir} or {dotenv_path_cwd}. Relying on environment or default dotenv search.", file=sys.stderr)
         load_dotenv()
     
-    # --- DEBUGGING PRINT ---
-    print(f"DEBUG: GOOGLE_CX from os.getenv after load_dotenv: '{os.getenv('GOOGLE_CX')}'") # Changed from GOOGLE_CX_ID
-    print(f"DEBUG: GOOGLE_API_KEY from os.getenv after load_dotenv: '{os.getenv('GOOGLE_API_KEY')}'")
-    print(f"DEBUG: OPENAI_API_KEY from os.getenv after load_dotenv: '{os.getenv('OPENAI_API_KEY')}'")
-    # --- END DEBUGGING PRINT ---
-
     parser = argparse.ArgumentParser(description="Parallel company data processor.")
     parser.add_argument("output_csv", help="Path to the output CSV file.")
     parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Number of worker processes.")
+    parser.add_argument("--headful", action="store_true", help="Run browser in headful mode (visible UI). Default is headless.")
     args = parser.parse_args()
 
     input_dir = "input"
@@ -385,10 +384,13 @@ def console_main() -> None:
     total_companies_for_pool = len(companies_to_process_tuples)
     if total_companies_for_pool > 0:
         num_workers = min(args.workers, total_companies_for_pool)
-        print(f"Using {num_workers} worker processes for {total_companies_for_pool} valid companies.")
+        print(f"Using {num_workers} worker processes for {total_companies_for_pool} valid companies. Headful mode: {args.headful}")
         
+        # Prepare arguments for starmap_async, including the headful_mode
+        tasks_with_headful_arg = [(name, num, args.headful) for name, num in companies_to_process_tuples]
+
         with multiprocessing.Pool(processes=num_workers) as pool:
-            async_pool_results = pool.starmap_async(process_company_data_wrapper, companies_to_process_tuples)
+            async_pool_results = pool.starmap_async(process_company_data_wrapper, tasks_with_headful_arg) # Pass tasks_with_headful_arg
             try:
                 list_of_results_dicts = async_pool_results.get()
                 print("Parallel processing finished. Aggregating results.")
