@@ -39,6 +39,9 @@ This project provides a collection of Python scripts to automate the process of:
 
 The system is designed to be flexible, offering scripts for single company lookups, sequential batch processing, and parallel batch processing for enhanced speed.
 
+## Recent Updates
+The scripts have recently been updated to improve error handling and provide more detailed logging via Python's standard `logging` module, making them more robust and easier to troubleshoot. Log output is directed to the console (stdout) by default.
+
 ## Features
 
 -   🌐 **Multiple URL Discovery Strategies**:
@@ -159,7 +162,7 @@ All scripts read input from the `input/` directory (automatically finding the ne
       # Headful mode
       python BraveWebCrawler/google_parallel_processing.py path/to/your_output_google_parallel.csv --workers 4 --headful
       ```
-      (This script runs browsers in headless mode by default. Use `--headful` to see browser windows.)
+      (This script runs browsers in headless mode by default, which is generally faster and consumes fewer resources for parallel tasks. Use `--headful` to see browser windows for debugging or observation.)
 
 **3. Startpage Agent Based Script:**
    *   **Parallel Batch Processing:**
@@ -194,6 +197,7 @@ Common general statuses include:
 - `AGENT_PROCESSING_TIMEOUT` (general timeout)
 - `TEMP_DIR_CREATION_ERROR`
 - `POOL_EXECUTION_ERROR`
+The exact status messages are designed to be informative and may vary slightly based on the specific point of failure or success. Consult the script's log files for detailed error information.
 
 ## How It Works (Simplified)
 
@@ -246,6 +250,7 @@ Parallel scripts use `multiprocessing` and create isolated browser environments 
     -   Look for errors in the console when the MCP server attempts to start.
 -   **Permissions**: Especially on Windows for PowerShell or for creating temporary directories.
 -   **Timeouts**: `AGENT_PROCESSING_TIMEOUT` in scripts might need adjustment for very slow websites.
+-   **Check script logs**: The scripts now feature detailed logging. If you encounter issues, the log files (output to console/stdout by default) will contain valuable information about the execution flow and any errors encountered.
 
 For more detailed technical information, see `DOCUMENTATION.md`.
 

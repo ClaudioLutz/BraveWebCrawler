@@ -49,9 +49,9 @@ Once a potential URL is identified (or if the agent is tasked to find one), an M
 The general workflow involves:
 1.  **Input:** Reading a list of companies from a CSV file (for batch processing).
 2.  **URL Discovery (Strategy-dependent):**
-    *   **API-based (Brave/Google):** Query the respective search API, use an LLM to select the best candidate URL from the results, and potentially fall back to Wikidata if no suitable URL is found. A pre-check for URL relevance against the company name is performed.
+    *   **API-based (Brave/Google):** Query the respective search API, use an LLM to select the best candidate URL from the results, and potentially fall back to Wikidata if no suitable URL is found. A pre-check for URL relevance against the company name is performed. Script execution and errors are logged using Python's standard `logging` module to the console (stdout).
     *   **Agent-driven (Startpage):** The agent is directly instructed to use Startpage.com to find the official website.
-3.  **Agent Processing:** An MCP agent, controlling a Playwright-driven browser, navigates to the identified/found URL. It attempts to confirm the website's relevance and extracts specified company details (e.g., founding year, address, contact info). This step has a configurable timeout.
+3.  **Agent Processing:** An MCP agent, controlling a Playwright-driven browser, navigates to the identified/found URL. It attempts to confirm the website's relevance and extracts specified company details (e.g., founding year, address, contact info). This step has a configurable timeout. Detailed logs of this process are also sent to the console.
 4.  **Output:** Results, including extracted data and a `processing_status`, are written to an output CSV file.
 
 ### System Components Diagram (Illustrative for API-based flow)
@@ -127,11 +127,11 @@ The project includes several primary scripts, categorized by their URL discovery
     *   `brave_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`, with Brave Search API/Wikidata for URL discovery. Features isolated browser profiles and dynamic MCP configurations per worker.
 
 **2. Google Search Based:**
-    *   `google_search.py`: CLI script for a single company using Google Custom Search API, then Wikidata as a fallback.
-    *   `google_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`. It uses the Google Custom Search API to find URL candidates, and an LLM selects the best URL. This selected URL is then passed to the agent for data extraction. If no URL is selected via Google Search, the agent step is skipped for that company. This script features isolated browser profiles and dynamic MCP configurations per worker. Headless mode is enabled by default (`--headless=new`), but can be run in headful mode using the `--headful` argument. It does not directly implement a Wikidata fallback.
+    *   `google_search.py`: CLI script for a single company using Google Custom Search API, then Wikidata as a fallback. It includes robust error handling, logging issues via Python's standard `logging` module to the console, and exits on critical errors (e.g., missing API keys, failure to identify a URL).
+    *   `google_parallel_processing.py`: Processes companies from a CSV in parallel using `multiprocessing.Pool`. It uses the Google Custom Search API to find URL candidates, and an LLM selects the best URL. This selected URL is then passed to the agent for data extraction. If no URL is selected via Google Search, the agent step is skipped for that company. This script features isolated browser profiles, dynamic MCP configurations per worker, comprehensive logging, and early exits for critical setup failures. Headless mode is enabled by default (`--headless=new`) to optimize resource usage and performance in parallel tasks, minimizing GUI overhead, but can be run in headful mode using the `--headful` argument. It does not directly implement a Wikidata fallback.
 
 **3. Startpage Agent Based:**
-    *   `startpage_parallel_processing.py`: Processes companies from a CSV in parallel. Unlike other scripts, this one tasks the agent to directly use Startpage.com to find the company URL and then extract data. It does not use Brave/Google/Wikidata APIs for initial URL discovery.
+    *   `startpage_parallel_processing.py`: Processes companies from a CSV in parallel. Unlike other scripts, this one tasks the agent to directly use Startpage.com to find the company URL and then extract data. It does not use Brave/Google/Wikidata APIs for initial URL discovery. Logging and error handling are consistent with other parallel scripts.
 
 ### Shared Modules and Concepts
 
@@ -142,6 +142,7 @@ The project includes several primary scripts, categorized by their URL discovery
     *   `select_best_url_with_llm()`: Uses an LLM to choose the best URL from a list of candidates (used by Brave and Google scripts).
     *   `is_url_relevant_to_company()`: Performs a quick pre-check on a URL's relevance before full agent processing (used by API-based scripts).
     *   `BLACKLIST`: A set of domains to ignore during URL discovery.
+    *   `google_harvester.py`, a key module for fact extraction from Google search snippets, now dynamically determines the current year (using `datetime.now().year`) when searching for annual reports. This change enhances the accuracy and relevance of financial document retrieval over time.
 
 *   **Environment Setup (`.env`)**:
     Requires API keys:
@@ -194,6 +195,7 @@ The project includes several primary scripts, categorized by their URL discovery
         *   `PRE_CHECK_URL_MISMATCH` (primarily for Brave scripts)
         *   `AGENT_PROCESSING_TIMEOUT` (general)
         *   Many other specific error/status codes (e.g., `TEMP_DIR_CREATION_ERROR`, `AGENT_OPENAI_KEY_MISSING`).
+    The exact status messages are designed to be informative and may vary. Always consult the detailed logs for complete error context.
 
 *   **Timeout**:
     Agent processing for each company is subject to a timeout, typically `AGENT_PROCESSING_TIMEOUT = 120` seconds in batch scripts.
@@ -456,6 +458,7 @@ Common Issues:
 *   **Permissions**: For temporary directory creation/deletion or PowerShell script execution.
 *   **Timeouts**: `AGENT_PROCESSING_TIMEOUT` might need adjustment for complex websites or slow network conditions.
 *   **LLM Errors**: Check OpenAI API key, model availability, and potential rate limits.
+*   **Consult Logs**: All scripts now utilize Python's standard `logging` module for detailed operational output and error reporting. If you encounter issues, the console output (stdout) provides comprehensive logs that are crucial for diagnosing problems.
 
 ## Future Enhancements
 *   More sophisticated URL relevance checking.
