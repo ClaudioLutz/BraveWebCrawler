@@ -2,7 +2,12 @@
 import re
 import asyncio
 import httpx
+import logging # Added logging
+from datetime import datetime # Added datetime
 from models import CompanyFacts
+
+# Initialize Logger
+logger = logging.getLogger(__name__)
 
 # Regexes remain a good tool for well-defined patterns
 CHE_ID_RX = re.compile(r"(CHE-\d{3}\.\d{3}\.\d{3})")
@@ -14,12 +19,26 @@ async def _google_search(query: str, api_key: str, cx: str) -> list[dict]:
     """Generic helper to call the Google Custom Search API."""
     url = "https://customsearch.googleapis.com/customsearch/v1"
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15) as client: # Timeout is already set
             r = await client.get(url, params={"key": api_key, "cx": cx, "q": query})
-            r.raise_for_status()
-            return r.json().get("items", [])
+            r.raise_for_status() # Raises HTTPStatusError for 4xx/5xx responses
+            # Attempt to parse JSON and get "items"
+            response_json = r.json()
+            return response_json.get("items", [])
     except httpx.HTTPStatusError as e:
-        print(f"Error searching Google for '{query}': {e}")
+        logger.error(f"Google Search API HTTPStatusError for query '{query}': {e.response.status_code} - {e.response.text}", exc_info=True)
+        return []
+    except httpx.RequestError as e: # Catches network errors, timeouts not leading to a response status code etc.
+        logger.error(f"Google Search API RequestError for query '{query}': {e}", exc_info=True)
+        return []
+    except httpx.InvalidURL as e: # If the URL constructed is somehow invalid
+        logger.error(f"Google Search API InvalidURL for query '{query}': {e}", exc_info=True)
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Google Search API JSONDecodeError for query '{query}'. Response text: {r.text[:200]}... Error: {e}", exc_info=True) # Log part of the response
+        return []
+    except Exception as e: # Catch-all for any other unexpected errors
+        logger.error(f"Unexpected error in _google_search for query '{query}': {e}", exc_info=True)
         return []
 
 async def get_facts_from_google(name: str, api_key: str, cx: str) -> CompanyFacts:
@@ -42,11 +61,10 @@ async def get_facts_from_google(name: str, api_key: str, cx: str) -> CompanyFact
         address_match = re.search(r"(?i)(?:Sitz|Adresse):\s*(.*)", zefix_snippet)
         if address_match:
             facts.haupt_sitz = address_match.group(1).strip()
-        else: # Fallback to title if address pattern fails, but clean it
-             title = zefix_results[0].get("title", "")
-             # Avoid generic titles like "Central Business Name Index"
-             if name.lower() in title.lower():
-                 facts.haupt_sitz = title.split(' - ')[0]
+            logger.info(f"Extracted address for '{name}' from Zefix snippet: {facts.haupt_sitz}")
+        else:
+            logger.warning(f"Could not extract address (Sitz/Adresse) from Zefix snippet for '{name}'. Snippet: '{zefix_snippet[:100]}...'")
+            # facts.haupt_sitz remains None or its default value
 
 
     # --- Stage 2: Parallel search for remaining, less-structured data ---
@@ -86,7 +104,7 @@ async def _search_single_fact(field: str, query: str, api_key: str, cx: str) -> 
 
     if field == "geschaeftsbericht":
         # FIX: Check for the current or previous year in the link to avoid old reports
-        current_year = 2025 # This should be dynamic in a real app
+        current_year = datetime.now().year # Dynamically get current year
         for item in items:
             link = item.get("link", "").lower()
             if link.endswith(".pdf") and (str(current_year) in link or str(current_year - 1) in link):
