@@ -2,9 +2,13 @@ import httpx
 import json
 import sys
 import re
+import logging # Added logging
 from urllib.parse import urlparse # urlunparse might be needed if you add more advanced normalization
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
+
+# --- Initialize Logger ---
+logger = logging.getLogger(__name__)
 
 # --- Constants for Search APIs ---
 # Brave
@@ -23,6 +27,7 @@ def select_best_url_with_llm(company_name: str, search_results: List[Dict[str, A
     Each item in search_results should be a dict with at least 'url', 'title', and 'description'.
     """
     if not search_results:
+        logger.info(f"No search results provided for {company_name}, skipping LLM selection.")
         return None
 
     formatted_results = []
@@ -51,36 +56,53 @@ Search Results:
 Company Name: "{company_name}"
 Which number corresponds to the most likely official homepage? Respond with the number only, or "None".
     """
-    # print(f"\n--- LLM Prompt for URL Selection ---\n{prompt_text}\n---------------------------------") # For debugging
+    logger.debug(f"LLM Prompt for URL selection for '{company_name}':\n{prompt_text}")
 
     try:
         response = llm.invoke(prompt_text)
-        selected_choice = response.content.strip().lower()
-        # print(f"LLM raw response for URL selection: '{selected_choice}'") # For debugging
+        raw_response_content = response.content.strip()
+        logger.info(f"LLM raw response for URL selection for '{company_name}': '{raw_response_content}'")
+
+        selected_choice = raw_response_content.lower()
 
         if selected_choice == "none":
+            logger.info(f"LLM indicated no suitable URL for '{company_name}'.")
             return None
 
+        # Try to extract a number if the response is not purely numeric
+        numeric_match = re.search(r'\d+', selected_choice)
+        extracted_number_str = None
+
         if selected_choice.isdigit():
-            selected_index = int(selected_choice) - 1
-            if 0 <= selected_index < len(search_results):
-                chosen_url = search_results[selected_index].get("url")
-                print(f"LLM selected URL ({selected_choice}): {chosen_url} for company: {company_name}")
-                return chosen_url
-            else:
-                print(f"LLM selected an out-of-bounds index: {selected_choice}", file=sys.stderr)
+            extracted_number_str = selected_choice
+        elif numeric_match:
+            extracted_number_str = numeric_match.group(0)
+            logger.info(f"Extracted number '{extracted_number_str}' from LLM response '{raw_response_content}' for '{company_name}'.")
+
+        if extracted_number_str:
+            try:
+                selected_index = int(extracted_number_str) - 1
+                if 0 <= selected_index < len(search_results):
+                    chosen_url = search_results[selected_index].get("url")
+                    logger.info(f"LLM selected URL ({extracted_number_str}): {chosen_url} for company: {company_name}")
+                    return chosen_url
+                else:
+                    logger.warning(f"LLM selected an out-of-bounds index: {extracted_number_str} (parsed as {selected_index}) for '{company_name}'. Number of results: {len(search_results)}.")
+                    return None
+            except ValueError: # Should not happen if isdigit() or regex match was successful, but as a safeguard
+                logger.warning(f"Could not convert extracted string '{extracted_number_str}' to int for '{company_name}'. Original response: '{raw_response_content}'", exc_info=True)
                 return None
         else:
-            # Fallback: If LLM returns something else, try to see if a URL is in its response.
-            for i, result in enumerate(search_results):
-                if result.get("url") in selected_choice:
-                    print(f"LLM selected URL by finding it in a non-numeric response: {result.get('url')}")
-                    return result.get("url")
-            print(f"LLM response for URL selection was not a valid number or 'None': '{selected_choice}'", file=sys.stderr)
+            # Fallback: If LLM returns something else non-numeric and without a clear number.
+            # Original fallback was to check if URL is in response, this might be too broad.
+            # For now, we will log that no valid number was found.
+            # Consider if the old fallback `result.get("url") in selected_choice` is desired.
+            # It could lead to unintended selections if the LLM is chatty.
+            logger.warning(f"LLM response for '{company_name}' was not 'None', did not contain a digit, and was not directly a number: '{raw_response_content}'")
             return None
 
     except Exception as e:
-        print(f"Error during LLM call for URL selection: {e}", file=sys.stderr)
+        logger.error(f"Error during LLM call or processing for URL selection for '{company_name}': {e}", exc_info=True)
         return None
 
 # --- Google Search Function ---
@@ -97,7 +119,7 @@ async def get_Google_Search_candidates(
     'is_ch_domain', and 'company_match_in_host'.
     """
     if not api_key or not cx:
-        print("Error: Google API Key or CX not provided. Skipping Google Search.", file=sys.stderr)
+        logger.error("Google API Key or CX not provided. Skipping Google Search.")
         return []
 
     params = {
@@ -163,17 +185,17 @@ async def get_Google_Search_candidates(
             not x["is_ch_domain"],
             not x["company_match_in_host"]
         ))
-        print(f"Found {len(candidate_results)} potential candidates for '{company_name}' from Google Search.")
+        logger.info(f"Found {len(candidate_results)} potential candidates for '{company_name}' from Google Search.")
         return candidate_results
 
     except httpx.RequestError as e:
-        print(f"Google Search API request error: {e}", file=sys.stderr)
+        logger.error(f"Google Search API request error for '{company_name}': {e}", exc_info=True)
     except httpx.HTTPStatusError as e:
-        print(f"Google Search API returned an error: {e.response.status_code} - {e.response.text}", file=sys.stderr)
-    except json.JSONDecodeError:
-        print("Google Search API response was not valid JSON.", file=sys.stderr)
+        logger.error(f"Google Search API returned an error for '{company_name}': {e.response.status_code} - {e.response.text}", exc_info=True)
+    except json.JSONDecodeError as e: # Added 'e' to capture exception info
+        logger.error(f"Google Search API response was not valid JSON for '{company_name}'. Error: {e}", exc_info=True)
     except Exception as e:
-        print(f"An unexpected error occurred in get_Google Search_candidates: {e}", file=sys.stderr)
+        logger.error(f"An unexpected error occurred in get_Google_Search_candidates for '{company_name}': {e}", exc_info=True)
     return []
 
 
@@ -184,7 +206,7 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
     Returns a list of dictionaries, where each dictionary contains 'url', 'title', 'description'.
     """
     if not brave_api_key:
-        print("Error: brave_api_key not provided for Brave Search.", file=sys.stderr)
+        logger.error("Brave API key not provided. Skipping Brave Search.")
         return []
 
     headers = {
@@ -201,7 +223,7 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
 
     candidate_results = []
     try:
-        print(f"Querying Brave Search for: '{params['q']}' with country '{params['country']}'")
+        logger.info(f"Querying Brave Search for: '{params['q']}' with country '{params['country']}' for company '{company}'")
         # Note: For async operation, this should use an async client as well.
         # For now, keeping it synchronous as per original structure.
         # If your main script always awaits this, convert it to async.
@@ -251,17 +273,17 @@ def get_brave_search_candidates(company: str, brave_api_key: str, count: int = 5
             not x["is_ch_domain"],
             not x["company_match_in_host"]
         ))
-        print(f"Found {len(candidate_results)} potential candidates for '{company}' from Brave Search.")
+        logger.info(f"Found {len(candidate_results)} potential candidates for '{company}' from Brave Search.")
         return candidate_results
 
     except httpx.RequestError as e:
-        print(f"Brave Search API request error: {e}", file=sys.stderr)
+        logger.error(f"Brave Search API request error for '{company}': {e}", exc_info=True)
     except httpx.HTTPStatusError as e:
-        print(f"Brave Search API returned an error: {e.response.status_code} - {e.response.text}", file=sys.stderr)
-    except json.JSONDecodeError:
-        print("Brave Search API response was not valid JSON.", file=sys.stderr)
+        logger.error(f"Brave Search API returned an error for '{company}': {e.response.status_code} - {e.response.text}", exc_info=True)
+    except json.JSONDecodeError as e: # Added 'e' to capture exception info
+        logger.error(f"Brave Search API response was not valid JSON for '{company}'. Error: {e}", exc_info=True)
     except Exception as e:
-        print(f"An unexpected error occurred in get_brave_search_candidates: {e}", file=sys.stderr)
+        logger.error(f"An unexpected error occurred in get_brave_search_candidates for '{company}': {e}", exc_info=True)
     return []
 
 
@@ -276,7 +298,7 @@ def get_wikidata_homepage(company: str) -> str | None:
         "search": company
     }
     try:
-        # print(f"Querying Wikidata entities for: '{company}'") # For debugging
+        logger.debug(f"Querying Wikidata entities for: '{company}'")
         # Note: For async operation, this should use an async client.
         r_search = httpx.get(WIKIDATA_SEARCH, params=params_search, timeout=5.0)
         r_search.raise_for_status()
@@ -284,7 +306,7 @@ def get_wikidata_homepage(company: str) -> str | None:
         search_results = search_results_json.get("search", [])
 
         if not search_results:
-            # print(f"Wikidata: No entity found for '{company}'") # For debugging
+            logger.info(f"Wikidata: No entity found for '{company}' in initial search.")
             return None
 
         qid = None
@@ -352,17 +374,20 @@ def get_wikidata_homepage(company: str) -> str | None:
         url_to_return = preferred_url or normal_url # Prioritize preferred
 
         if url_to_return:
-            print(f"Wikidata found URL: {url_to_return} for {company} (QID: {qid})")
+            logger.info(f"Wikidata found URL: {url_to_return} for {company} (QID: {qid})")
             return url_to_return
+        else:
+            logger.info(f"Wikidata: No suitable official website URL found for {company} (QID: {qid}) after checking claims.")
+            return None
             
     except httpx.RequestError as e:
-        print(f"Wikidata API request error: {e}", file=sys.stderr)
+        logger.error(f"Wikidata API request error for '{company}': {e}", exc_info=True)
     except httpx.HTTPStatusError as e:
-        print(f"Wikidata API returned an error: {e.response.status_code} - {e.response.text}", file=sys.stderr)
-    except json.JSONDecodeError:
-        print("Wikidata API response was not valid JSON.", file=sys.stderr)
+        logger.error(f"Wikidata API returned an error for '{company}': {e.response.status_code} - {e.response.text}", exc_info=True)
+    except json.JSONDecodeError as e: # Added 'e' to capture exception info
+        logger.error(f"Wikidata API response was not valid JSON for '{company}'. Error: {e}", exc_info=True)
     except Exception as e:
-        print(f"An unexpected error occurred in get_wikidata_homepage for {company}: {e}", file=sys.stderr)
+        logger.error(f"An unexpected error occurred in get_wikidata_homepage for '{company}': {e}", exc_info=True)
     return None
 
 # This function is designed to be called by the main script before handing off to the agent.
@@ -378,7 +403,7 @@ async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.
         return True # Or False, depending on desired behavior for bad URLs. True lets agent handle it.
 
     try:
-        # print(f"Pre-check: Fetching {url} for title...")
+        logger.debug(f"Relevance pre-check: Fetching {url} for title for company '{company_name}'...")
         response = await client.get(url, follow_redirects=True, timeout=10.0)
         response.raise_for_status()
         html_content = response.text
@@ -404,33 +429,33 @@ async def is_url_relevant_to_company(url: str, company_name: str, client: httpx.
         # If title is specific and matches, it's relevant
         if page_title and not any(generic in normalized_page_title for generic in ["home", "startseite", "accueil", "benvenuto", "willkommen", "homepage", "website", "site officiel"]):
             if title_match_found:
-                # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (specific title match).")
+                logger.debug(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (specific title match).")
                 return True
         
         # If domain matches, it's relevant
         if domain_match_found:
-            # print(f"Relevance pre-check for '{company_name}' at '{url}': Domain='{domain}'. Seems relevant (domain match).")
+            logger.debug(f"Relevance pre-check for '{company_name}' at '{url}': Domain='{domain}'. Seems relevant (domain match).")
             return True
         
         # If title is generic but still matches, it's also relevant (e.g. "Company Name - Home")
         if title_match_found:
-            # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (generic title match).")
+            logger.debug(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}'. Seems relevant (generic title match).")
             return True
 
-        # print(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}', Domain='{domain}'. Potential mismatch.")
+        logger.info(f"Relevance pre-check for '{company_name}' at '{url}': Title='{page_title}', Domain='{domain}'. Potential mismatch.")
         return False
 
     except httpx.TimeoutException as e:
-        print(f"Timeout fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
+        logger.warning(f"Timeout fetching URL {url} for relevance pre-check for '{company_name}': {e}", exc_info=True)
         return True # Treat timeout as potentially relevant to let agent decide
     except httpx.HTTPStatusError as e:
-        print(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check: {e.status_code}", file=sys.stderr)
+        logger.warning(f"HTTP error {e.response.status_code} for URL {url} during relevance pre-check for '{company_name}'.", exc_info=True)
         if e.response.status_code in [403, 404, 500, 502, 503, 504]: # Definite issues
             return False
         return True # Other HTTP errors, let agent try
     except httpx.RequestError as e: 
-        print(f"Request error fetching URL {url} for relevance pre-check: {e}", file=sys.stderr)
+        logger.warning(f"Request error fetching URL {url} for relevance pre-check for '{company_name}': {e}", exc_info=True)
         return False # Likely network issue or bad URL, consider not relevant
     except Exception as e: 
-        print(f"Unexpected error during relevance pre-check for {url}: {e}", file=sys.stderr)
+        logger.error(f"Unexpected error during relevance pre-check for {url} for '{company_name}': {e}", exc_info=True)
         return True # Unknown error, let agent try
