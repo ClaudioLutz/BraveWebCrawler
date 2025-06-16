@@ -8,7 +8,7 @@ import json
 import multiprocessing
 import shutil
 import time
-import psutil
+import psutil #musste ich so installieren: python -m pip install psutil
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from mcp_use.logging import Logger
